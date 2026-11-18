@@ -9,8 +9,8 @@ minor versions.
 
 ### Added
 
-- CLI: `pilotage version` prints the installed version and short commit, and the version reported by a running
-  server (with a hint to restart when the two differ).
+- CLI: `pilotage version` (also `-v`, `--version`) prints the installed version and short commit, and the version
+  reported by a running server (with a hint to restart when the two differ).
 
 ### Fixed
 

@@ -278,7 +278,7 @@ case "${1:-status}" in
   stop) cmd_stop ;;
   restart) cmd_stop >/dev/null; rm -f "$STOPFLAG"; sleep 0.5; cmd_start ;;
   status) cmd_status ;;
-  version) cmd_version ;;
+  version|-v|--version) cmd_version ;;
   open) cmd_open ;;
   pair) cmd_pair ;;
   phone) cmd_phone ;;
