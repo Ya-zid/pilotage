@@ -1,7 +1,7 @@
 // Projects: every project grouped by workspace, filtered by lifecycle, as a card grid or a dense list.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { EyeOff, FolderKanban, FolderPlus, LayoutGrid, List, Search, X } from 'lucide-react';
+import { ChevronRight, EyeOff, FolderKanban, FolderPlus, LayoutGrid, List, Search, Sparkles, X } from 'lucide-react';
 import { useOverview, useProjects } from '../api';
 import { useWork } from '../api-extra';
 import type { ProjectSummary } from '../types';
@@ -180,8 +180,6 @@ export default function Projects() {
     }
     return runningWord(c);
   };
-  const scopedRun = runWord(scoped);
-  const subtitle = isLoading ? ' ' : `${counts.current} current · ${plural(scoped.length, 'project')} in all${scopedRun ? ` · ${scopedRun.label}` : ''}`;
   // per workspace: every visible project, the same number the sidebar shows next to the workspace
   const wsTotals = useMemo(() => {
     const m = new Map<string, number>();
@@ -195,6 +193,7 @@ export default function Projects() {
     return { text: `${n} ${filterWord} of ${total}`, title: `${n} ${filterWord} out of ${plural(total, 'project')} in this workspace` };
   };
   const ai = overview?.ai;
+  const scoutN = overview?.scout?.newCount || 0;
   const catchingUp = ai && ai.enabled && !ai.pausedByUser && ai.pendingBlocks + ai.queueLength > 0 && shown.some((p) => !p.oneLiner && p.sessionCount > 0);
   const showStatus = true;
 
@@ -204,7 +203,6 @@ export default function Projects() {
       crumbs={[{ label: 'Projects', to: '/projects' }]}
       glyph={<WorkspaceAvatar ws={ws} name={wsName || ws} size={40} />}
       title={wsName}
-      subtitle={subtitle}
       actions={
         <Button icon={<FolderPlus />} onClick={() => setCreating(true)}>
           New project
@@ -213,13 +211,22 @@ export default function Projects() {
     />
   ) : (
     <PageHeader
-      className="pj-ph"
+      className="pj-ph pp-ph"
       title="Projects"
-      subtitle={subtitle}
+      // phone: the button sits in the title row instead of taking a row of its own
+      status={
+        phone ? (
+          <Button size="sm" variant="ghost" icon={<FolderPlus />} onClick={() => setCreating(true)} className="pp-new">
+            New project
+          </Button>
+        ) : undefined
+      }
       actions={
-        <Button icon={<FolderPlus />} onClick={() => setCreating(true)}>
-          New project
-        </Button>
+        phone ? undefined : (
+          <Button icon={<FolderPlus />} onClick={() => setCreating(true)}>
+            New project
+          </Button>
+        )
       }
     />
   );
@@ -357,6 +364,15 @@ export default function Projects() {
             )}
           </section>
         ))}
+        {!ql && !ws && scoutN > 0 && (
+          <Link to="/ideas" className="pp-scout">
+            <Sparkles aria-hidden="true" />
+            <span>
+              Claude spotted {plural(scoutN, 'possible project')}
+            </span>
+            <ChevronRight aria-hidden="true" className="pp-scout-chev" />
+          </Link>
+        )}
         {elsewhere > 0 && (
           <div className="pp-elsewhere small faint">
             {plural(elsewhere, 'more project')} {elsewhere === 1 ? 'matches' : 'match'} in other filters.{' '}

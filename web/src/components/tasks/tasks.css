@@ -452,6 +452,15 @@ a.task-src:hover .truncate {
 .tp-val .select {
   max-width: 320px;
 }
+.task-detail-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.task-detail-cap {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+}
 .task-detail-edit {
   min-height: 84px;
   resize: none;
@@ -728,6 +737,9 @@ a.task-src:hover .truncate {
 
 /* ---------------------------------------------------------------- TasksView (Tasks page + Project › Tasks) */
 .tasks-view {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
   min-width: 0;
 }
 .ph > .tasks-tabs {
@@ -800,43 +812,195 @@ a.task-proj-name:hover {
 .task-fold p {
   margin: 0;
 }
-.task-dropped-hint {
-  margin-top: 10px;
-}
-.task-phone-actions {
+
+/* ---------------------------------------------------------------- Tasks page rows (TaskLine.tsx) */
+.task-groups {
   display: flex;
-  justify-content: flex-start;
-  margin-top: -6px;
+  flex-direction: column;
+  min-width: 0;
+}
+.task-groups > .section + .section {
+  margin-top: var(--section-gap, 40px);
+}
+.task-line {
+  align-items: flex-start;
+}
+.task-line .lrow-lead {
+  margin-top: 1px;
+}
+.task-line-title {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  font-size: var(--fs-base);
+  font-weight: 550;
+  line-height: 1.45;
+  color: var(--text);
+}
+/* two lines at most, cut by CSS (titles are no longer clipped at 96 chars on the server) */
+.task-line-title > .t,
+.sg-title {
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.task-line-title > .prio,
+.task-line-title > .task-today {
+  margin-top: 3px;
+}
+.task-line.closed .task-line-title > .t {
+  color: var(--text-3);
+}
+.task-line-act {
+  flex: none;
+  align-self: center;
+  display: flex;
+  gap: 2px;
+}
+.task-line-act .sicon {
+  color: var(--text-3);
+}
+.task-line-act.hover-only,
+.sg-row .sg-actions {
+  opacity: 0;
+  transition: opacity var(--dur-1);
+}
+.task-line:hover .task-line-act.hover-only,
+.task-line:focus-within .task-line-act.hover-only,
+.sg-row:hover .sg-actions,
+.sg-row:focus-within .sg-actions,
+.sg-row.focused .sg-actions,
+.sg-row.menu-open .sg-actions {
+  opacity: 1;
+}
+/* the AI's take, inside the meta line */
+.task-hint {
+  font-weight: 550;
+}
+.task-hint.done {
+  color: var(--green, var(--text-2));
+}
+.task-hint.moved-on {
+  color: var(--text-3);
+}
+/* who does it: You / Claude / Waiting */
+.task-who {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--text-3);
+}
+.task-who svg {
+  width: 12px;
+  height: 12px;
+}
+.task-who.you {
+  color: var(--text-2);
+}
+.task-who.waiting {
+  color: var(--amber);
 }
 
-/* ---------------------------------------------------------------- Suggested (triage) */
+/* toolbar + filter panel */
+.task-toolbar-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.task-filter-panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px 16px;
+  padding: 12px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+}
+.tfp-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+.tfp-label {
+  font-size: var(--fs-xs);
+  font-weight: 550;
+  color: var(--text-3);
+}
+.tfp-clear {
+  margin-left: auto;
+}
+.task-foot {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+}
+.task-foot > .task-fold {
+  align-self: stretch;
+}
+.task-auto-toggle {
+  padding: 0 10px;
+  margin-left: -10px;
+}
 .sg-keys {
   display: flex;
   align-items: center;
   gap: 4px;
   flex-wrap: wrap;
-  margin-bottom: -10px;
 }
 .sg-keys .kbd {
   margin: 0 1px;
+}
+
+/* ---------------------------------------------------------------- Suggested (triage) */
+.sg-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  min-width: 0;
+}
+.sg-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.sg-group-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.sg-group-name {
+  font-size: var(--fs-md);
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  min-width: 0;
+}
+a.sg-group-name:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: var(--text-4);
 }
 .sg-list {
   overflow: hidden;
 }
 .sg-row {
-  position: relative;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
-  column-gap: 20px;
-  row-gap: 10px;
-  padding: 14px 16px 14px 20px;
-  border-top: 1px solid var(--border);
+  flex-wrap: wrap;
+  align-items: center;
   outline: none;
-  transition: background var(--dur-1);
 }
-.sg-row:first-child {
-  border-top: 0;
+.sg-row > .lrow-body {
+  flex: 1 1 0;
 }
 .sg-row.focused,
 .sg-row:focus-visible {
@@ -853,81 +1017,20 @@ a.task-proj-name:hover {
   border-radius: 2px;
   background: var(--accent);
 }
-.sg-body {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
 .sg-title {
-  align-self: flex-start;
-  max-width: 100%;
-  border: 0;
-  padding: 0;
-  margin: 0;
-  background: transparent;
-  color: var(--text);
-  font: inherit;
   font-size: var(--fs-base);
-  font-weight: 560;
-  line-height: 1.4;
-  text-align: left;
-  cursor: pointer;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  overflow: hidden;
-}
-.sg-title:hover {
-  text-decoration: underline;
-  text-underline-offset: 3px;
-  text-decoration-color: var(--text-4);
-}
-.sg-meta {
-  min-width: 0;
-}
-.sg-reason {
-  font-size: var(--fs-sm);
-  color: var(--text-2);
-  line-height: 1.5;
-  max-width: 78ch;
-}
-.sg-src-line {
-  display: flex;
-  min-width: 0;
-}
-.sg-src {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  min-width: 0;
-  max-width: 100%;
-  font-size: var(--fs-xs);
-  color: var(--text-3);
-  line-height: 1.4;
-}
-.sg-src > svg {
-  flex: none;
-  width: 12px;
-  height: 12px;
-  color: var(--text-4);
-}
-a.sg-src:hover {
+  font-weight: 550;
+  line-height: 1.45;
   color: var(--text);
-}
-a.sg-src:hover .truncate {
-  text-decoration: underline;
-  text-underline-offset: 2px;
-  text-decoration-color: var(--text-4);
 }
 .sg-actions {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 2px;
   flex: none;
 }
 .sg-chips {
-  grid-column: 1 / -1;
+  flex: 1 0 100%;
   display: flex;
   align-items: center;
   flex-wrap: wrap;
@@ -981,26 +1084,44 @@ a.sg-src:hover .truncate {
   color: var(--text);
 }
 @media (max-width: 860px) {
-  .sg-row {
-    grid-template-columns: minmax(0, 1fr);
-    padding: 14px 16px;
-    row-gap: 12px;
+  .task-groups > .section + .section {
+    margin-top: var(--section-gap, 32px);
   }
-  .sg-actions {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 6px;
+  .sg-groups {
+    gap: 24px;
   }
-  .sg-actions .btn {
+  /* phone: the one action and the ⋯ stay visible (no hover) */
+  .sg-row .sg-actions {
+    opacity: 1;
+    gap: 4px;
+  }
+  .sg-actions .btn.sm {
+    height: 40px;
+    min-height: 40px;
+  }
+  /* the one visible action: a quiet accent word, not a bordered button repeated down the list */
+  .sg-keep.btn {
+    color: var(--accent);
+    padding: 0 10px;
+  }
+  .sg-more.btn.sm.icon {
+    width: 40px;
+    height: 40px;
+  }
+  .task-filter-panel {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .task-filter-panel .seg {
+    display: flex;
+  }
+  .task-filter-panel .seg button {
+    flex: 1;
     justify-content: center;
-    padding: 0 6px;
   }
-  /* four actions on one row: words only, so "Not now" and "Dismiss" fit at 360px */
-  .sg-actions .btn > svg {
-    display: none;
-  }
-  .sg-actions .btn.ghost {
-    box-shadow: inset 0 0 0 1px var(--border);
+  .tfp-clear {
+    margin-left: 0;
+    align-self: flex-start;
   }
   .sg-chips {
     display: grid;

@@ -1,8 +1,9 @@
-// More (phone): the pages that aren't tabs (Projects, Ideas, History, Portfolio & CV, Settings, How Pilotage works),
-// plus Claude usage. Counts use the same rules as the desktop pages (Projects "current" = the Projects page filter).
-import { Briefcase, ChevronRight, CircleHelp, FolderKanban, Gauge, History, Lightbulb, Settings } from 'lucide-react';
-import { useBootstrap, useIdeas, useOverview, useProjects } from '../api';
-import { Card, ListRow, Meter, PageHeader, USAGE_LABELS } from '../components/ui';
+// More (phone): the pages that aren't tabs (Tasks, Ideas, History, Portfolio & CV, Settings, How Pilotage works),
+// plus Claude usage. One line per page; only Tasks and Ideas carry a state line (their counts), nothing explains itself.
+import { Briefcase, ChevronRight, CircleHelp, Gauge, History, Lightbulb, ListChecks, Settings } from 'lucide-react';
+import { useBootstrap, useIdeas, useOverview } from '../api';
+import { useTodayTaskCount } from '../components/Layout';
+import { Card, CountPill, ListRow, Meter, PageHeader, USAGE_LABELS } from '../components/ui';
 import { fmtDateTime, fmtTime, plural } from '../util';
 import './More.css';
 
@@ -22,24 +23,32 @@ function UsageRow({ label, pct, resetsAt, sameDay }: { label: string; pct: numbe
 export default function More() {
   const { data: o } = useOverview();
   const { data: boot } = useBootstrap();
-  const { data: projects } = useProjects();
   const { data: ideas } = useIdeas();
   const u = o?.usage || boot?.usage;
-  // same rule as the Projects page "Current" filter
-  const current = projects ? projects.filter((p) => p.liveCount > 0 || p.status === 'active' || p.status === 'paused').length : null;
-  const savedIdeas = ideas ? ideas.filter((i) => !i.doneAt).length : null;
+  const today = useTodayTaskCount();
+  const work = o?.work;
+  const open = work ? (work.todoCount || 0) + (work.doingCount || 0) : 0;
+  const savedIdeas = ideas ? ideas.filter((i) => !i.doneAt).length : 0;
   const possible = o?.scout?.newCount || 0;
-  const ideasSub =
-    savedIdeas == null && !o
-      ? 'Things you might do'
-      : [possible ? plural(possible, 'possible project') : null, savedIdeas ? plural(savedIdeas, 'saved idea') : null].filter(Boolean).join(' · ') || 'Nothing saved yet';
   const items = [
-    { to: '/projects', icon: <FolderKanban />, label: 'Projects', sub: projects ? `${plural(projects.length, 'project')} · ${current} current` : 'Every repo and folder you work in' },
-    { to: '/ideas', icon: <Lightbulb />, label: 'Ideas', sub: ideasSub },
-    { to: '/history', icon: <History />, label: 'History', sub: 'What you did, day by day' },
-    { to: '/portfolio', icon: <Briefcase />, label: 'Portfolio & CV', sub: 'Your projects as CV entries' },
-    { to: '/settings', icon: <Settings />, label: 'Settings', sub: 'Phone access, devices, AI, defaults' },
-    { to: '/guide', icon: <CircleHelp />, label: 'How Pilotage works', sub: 'What everything means, on one page' },
+    {
+      to: '/tasks',
+      icon: <ListChecks />,
+      label: 'Tasks',
+      sub: work ? [today ? `${today} for today` : null, open ? `${open} to do` : 'Nothing to do'].filter(Boolean).join(' · ') : undefined,
+      count: today > 0 ? <CountPill n={today} tone="accent" title={`${plural(today, 'task')} for today or in progress`} /> : null,
+    },
+    {
+      to: '/ideas',
+      icon: <Lightbulb />,
+      label: 'Ideas',
+      sub: [possible ? plural(possible, 'possible project') : null, savedIdeas ? plural(savedIdeas, 'saved idea') : null].filter(Boolean).join(' · ') || undefined,
+      count: possible > 0 ? <CountPill n={possible} title={plural(possible, 'new possible project')} /> : null,
+    },
+    { to: '/history', icon: <History />, label: 'History' },
+    { to: '/portfolio', icon: <Briefcase />, label: 'Portfolio & CV' },
+    { to: '/settings', icon: <Settings />, label: 'Settings' },
+    { to: '/guide', icon: <CircleHelp />, label: 'How Pilotage works' },
   ];
   const sameDay = (t?: number) => !!t && new Date(t).toDateString() === new Date().toDateString();
   return (
@@ -47,7 +56,21 @@ export default function More() {
       <PageHeader title="More" />
       <Card flush className="more-menu">
         {items.map((i) => (
-          <ListRow key={i.to} dense to={i.to} lead={<span className="more-ico">{i.icon}</span>} title={i.label} sub={i.sub} trail={<ChevronRight size={16} />} label={i.label} />
+          <ListRow
+            key={i.to}
+            dense
+            to={i.to}
+            lead={<span className="more-ico">{i.icon}</span>}
+            title={i.label}
+            sub={'sub' in i ? i.sub : undefined}
+            trail={
+              <>
+                {'count' in i && i.count}
+                <ChevronRight size={16} />
+              </>
+            }
+            label={i.label}
+          />
         ))}
       </Card>
       <Card title="Claude usage" icon={<Gauge />}>

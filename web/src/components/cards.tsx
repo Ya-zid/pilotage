@@ -8,6 +8,20 @@ import { Dot, LiveStatus, Meta, ProjectGlyph, Snippet, StatusIcon, WorkStatus, s
 import { useApp } from './AppContext';
 import { api, useInvalidate, useOverview, useWsl } from '../api';
 import { ago, fmtDate, wsColor, shortModel, plural } from '../util';
+import './cards.css';
+
+/** Project glyph (identity) with a state as a small corner badge: the anchor that leads session and project rows
+ *  (calm redesign, principle 5). `status` uses the StatusIcon vocabulary; `badge` takes any small icon instead. */
+export function GlyphStatus({ name, ws, color, size = 24, status, statusTitle, badge, className = '' }: { name: string; ws?: string | null; color?: string | null; size?: number; status?: string | null; statusTitle?: string; badge?: React.ReactNode; className?: string }) {
+  return (
+    <span className={`gstat ${className}`} style={{ width: size, height: size }}>
+      <ProjectGlyph name={name} ws={ws} color={color} size={size} title={statusTitle ? `${name} · ${statusTitle}` : name} />
+      {(status || badge) && (
+        <span className={`gstat-badge${status ? ` gs-${status}` : ''}`}>{status ? <StatusIcon status={status} size={12} title={statusTitle} /> : badge}</span>
+      )}
+    </span>
+  );
+}
 
 /** Process state of a running session, in the shared status vocabulary (see ui.tsx STATUS):
  *  needs-you (amber) · working (accent) · idle_live = "Open" (grey). */
@@ -343,7 +357,7 @@ export function BlockRow({ b, showProject = true, showSession = true }: { b: Blo
       {!b.live && open && (
         <button
           className="btn sm ghost block-action on-hover above"
-          onClick={() => openNewSession({ resumeId: b.sessionId, prompt: d!.nextStep ? `Let's continue. Next step: ${d!.nextStep}` : '' })}
+          onClick={() => openNewSession({ resumeId: b.sessionId })}
           title="Resume this session"
         >
           <Play size={13} /> Continue

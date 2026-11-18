@@ -132,9 +132,6 @@ export default function Portfolio() {
     <PageHeader
       className="cv-ph"
       title="Portfolio & CV"
-      subtitle={
-        data ? (included.length ? `${plural(included.length, 'project')} included in your CV, in ${L[lang].name}.` : 'Choose the projects that belong in your CV.') : 'Your projects as CV entries.'
-      }
       actions={
         data ? (
           <SegmentedControl

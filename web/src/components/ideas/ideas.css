@@ -7,9 +7,9 @@
 }
 .scout-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
   gap: 12px;
-  align-items: start;
+  align-items: stretch;
 }
 .scout-grid.compact {
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
@@ -17,7 +17,8 @@
 .scout-card {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
+  height: 100%;
   min-width: 0;
   padding: 18px 20px 16px;
   background: var(--surface);
@@ -35,26 +36,16 @@
   gap: 10px;
   min-width: 0;
 }
+/* the kind is a word in the meta line, colored, not a pill */
 .scout-kind {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  height: 20px;
-  padding: 0 8px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--violet) 14%, transparent);
   color: var(--violet);
-  font-size: var(--fs-2xs);
-  font-weight: 650;
-  letter-spacing: 0.01em;
+  font-weight: 600;
   white-space: nowrap;
 }
 .scout-kind.k-reusable {
-  background: color-mix(in srgb, var(--teal) 14%, transparent);
   color: var(--teal);
 }
 .scout-kind.k-idea {
-  background: color-mix(in srgb, var(--blue) 14%, transparent);
   color: var(--blue);
 }
 .scout-meta {
@@ -62,7 +53,11 @@
   flex-wrap: nowrap;
   overflow: hidden;
 }
-.scout-meta > :first-child {
+.scout-meta > * {
+  flex: none;
+}
+.scout-meta > :nth-child(2) {
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
 }
@@ -100,7 +95,7 @@ a.scout-src:hover .truncate {
 .scout-pitch {
   margin: 0;
   font-size: var(--fs-sm);
-  color: var(--text);
+  color: var(--text-2);
   line-height: 1.5;
 }
 .scout-why {
@@ -150,7 +145,8 @@ a.scout-src:hover .truncate {
   color: var(--text);
 }
 .scout-fold > summary {
-  font-size: var(--fs-xs);
+  font-size: var(--fs-sm);
+  color: var(--text-3);
 }
 .scout-fold > .disclosure-body {
   padding-top: 6px;
@@ -160,18 +156,10 @@ a.scout-src:hover .truncate {
 }
 .scout-actions {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 4px 6px;
-  margin-top: 4px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border);
-}
-.scout-card.compact .scout-actions {
-  padding-top: 10px;
-}
-.scout-actions > .btn.ghost {
-  padding: 0 8px;
+  gap: 6px;
+  margin-top: auto;
+  padding-top: 4px;
 }
 .scout-more {
   align-self: flex-start;
@@ -221,20 +209,6 @@ a.scout-src:hover .truncate {
   padding-bottom: 28px;
 }
 
-/* From today's plan */
-.plan-ideas .plan-idea {
-  align-items: flex-start;
-}
-.plan-idea-text {
-  font-size: var(--fs-sm);
-  color: var(--text);
-  line-height: 1.55;
-}
-.plan-idea-actions {
-  display: flex;
-  gap: 4px;
-  flex: none;
-}
 
 @media (max-width: 860px) {
   .scout-grid,
@@ -244,36 +218,14 @@ a.scout-src:hover .truncate {
   .scout-card {
     padding: 16px;
   }
-  .scout-actions {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    gap: 6px;
+  .scout-actions > .btn.sm {
+    height: 40px;
+    min-height: 40px;
   }
-  .scout-actions > .btn:first-child {
-    grid-column: 1 / -1;
-  }
-  .scout-actions > .btn {
-    justify-content: center;
-  }
-  .scout-actions > .btn.ghost {
-    box-shadow: inset 0 0 0 1px var(--border);
+  .scout-menu-btn.btn.sm.icon {
+    width: 40px;
   }
   .scout-more {
     height: 40px;
-  }
-  .plan-idea {
-    flex-wrap: wrap;
-  }
-  .plan-idea-actions {
-    width: 100%;
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 6px;
-  }
-  .plan-idea-actions .btn {
-    justify-content: center;
-  }
-  .plan-idea-actions .btn.ghost {
-    box-shadow: inset 0 0 0 1px var(--border);
   }
 }

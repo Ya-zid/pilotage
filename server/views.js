@@ -5,6 +5,7 @@ import { HOME } from './config.js';
 import { clip, oneLine, isoDay, isInside, plain, dejargonAll } from './util.js';
 import { isAutomation, automationKey, listDocs, detectStack } from './sources/projects.js';
 import { WORKSPACE_DISPLAY } from './workspaces.js';
+import { shortTitle } from './work/extract.js';
 
 const DAY = 86400e3;
 
@@ -134,7 +135,7 @@ export class Views {
       lastPrompt: clip(plain(meta.lastPrompt || ''), 260),
       recap: meta.awaySummary ? clip(meta.awaySummary, 400) : null,
       recapAt: meta.awayAt || 0,
-      digest: d ? { title: d.title, summary: d.summary, outcome: d.outcome, status: d.status, nextStep: d.nextStep, topic: d.topic } : null,
+      digest: d ? { title: d.title, summary: d.summary, outcome: d.outcome, status: d.status, nextStep: d.nextStep, todo: d.nextStep ? shortTitle(d.todo, d.nextStep) : '', who: d.who || null, topic: d.topic } : null,
       blocks: isAutomation(meta) ? 0 : this.ai.blocksOf(meta).length,
       automation: isAutomation(meta) ? automationKey(meta) : null,
       model: models[0]?.[0] || null,
@@ -633,7 +634,8 @@ export class Views {
         projectName: this.store.project(p.path).name || p.name,
         workspace: p.workspace || null,
         summary: clip(plain(d?.outcome || d?.summary || meta.lastPrompt || ''), 240),
-        nextStep: clip(plain(d?.nextStep || ''), 180),
+        nextStep: clip(plain(d?.nextStep || ''), 180), // Claude-facing (the Resume prompt's context)
+        todo: d?.nextStep ? shortTitle(d.todo, d.nextStep) : '', // the same step as a short to-do, for the row
         status: d?.status || null,
         lastAt: meta.lastAt,
         quietDays: age < 3 * DAY ? 0 : Math.floor(age / DAY),

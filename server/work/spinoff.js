@@ -104,28 +104,43 @@ export function planFolder({ name, parentDir, sourcePath, home = HOME }) {
     if (!path.isAbsolute(p)) throw new HttpError(400, 'The folder must be an absolute path (or start with ~/)');
     parent = path.resolve(p);
   } else parent = defaultParent(sourcePath, home);
+  // The folder to create it in may not exist yet: it gets created along with the project. Its nearest existing
+  // ancestor (links resolved) decides where it really lands, so the checks below see the real path.
+  let existing = parent;
+  const missing = [];
   let realParent;
-  try {
-    realParent = fs.realpathSync(parent);
-  } catch {
-    throw new HttpError(400, `${tilde(parent, home)} does not exist`);
+  for (;;) {
+    try {
+      realParent = fs.realpathSync(existing);
+      break;
+    } catch {
+      if (lexists(existing)) throw new HttpError(400, `${tilde(existing, home)} is a broken link`);
+      const up = path.dirname(existing);
+      if (up === existing) throw new HttpError(400, `${tilde(parent, home)} does not exist`);
+      missing.unshift(path.basename(existing));
+      existing = up;
+    }
   }
-  if (!fs.statSync(realParent).isDirectory()) throw new HttpError(400, `${tilde(parent, home)} is not a folder`);
+  if (!fs.statSync(realParent).isDirectory()) throw new HttpError(400, `${tilde(existing, home)} is not a folder`);
+  if (missing.length > 6) throw new HttpError(400, 'That creates too many new folders at once');
+  if (missing.some((n) => !n || n === '.' || /[\0-\x1f]/.test(n))) throw new HttpError(400, 'Invalid folder');
+  const firstNew = missing.length ? path.join(realParent, missing[0]) : null;
+  if (missing.length) realParent = path.join(realParent, ...missing);
   if (!isInside(realParent, realHome)) throw new HttpError(400, 'New projects must be inside your home folder');
   if (forbiddenRoots(realHome).some((f) => isInside(realParent, f))) throw new HttpError(400, 'Projects cannot be created there');
   const dir = path.join(realParent, slug);
   if (!isInside(dir, realHome) || dir === realHome) throw new HttpError(400, 'New projects must be inside your home folder');
   // Case-insensitive too: ~/acme next to ~/Acme would be confusing (and lands in the same workspace).
-  const names = fs.readdirSync(realParent);
+  const names = missing.length ? [] : fs.readdirSync(realParent);
   const siblings = new Map(names.map((n) => [n.toLowerCase(), n]));
   const taken = (n) => siblings.has(n) || lexists(path.join(realParent, n));
   if (taken(slug)) {
     let suggestion = null;
     for (let i = 2; i < 10 && !suggestion; i++) if (!taken(`${slug}-${i}`)) suggestion = `${slug}-${i}`;
-    const existing = path.join(realParent, siblings.get(slug) || slug);
-    throw new HttpError(409, `${tilde(existing, realHome)} already exists`, { suggestion, existing });
+    const clash = path.join(realParent, siblings.get(slug) || slug);
+    throw new HttpError(409, `${tilde(clash, realHome)} already exists`, { suggestion, existing: clash });
   }
-  return { slug, parent: realParent, dir };
+  return { slug, parent: realParent, dir, newParent: firstNew };
 }
 
 // ---------------------------------------------------------------- handoff (CLAUDE.md)
@@ -142,8 +157,14 @@ const HANDOFF_SCHEMA = {
     },
     openQuestions: { type: 'array', items: { type: 'string' }, description: '2-6 unresolved questions the user must answer before or during the work' },
     firstSteps: { type: 'array', items: { type: 'string' }, description: '3-6 concrete first steps for the new project, imperative mood, the first one small' },
+    tasks: {
+      type: 'array',
+      items: { type: 'string' },
+      description:
+        "1-2 to-dos for the user's task list, 3-7 words each, verb first, plain words (e.g. \"Pick the launch date\", \"Send the draft to the client\"). Only things the user does or decides; never instructions or guardrails for Claude (\"only after…\", \"ask before…\", \"read this file\"). Empty if there is nothing for the user to do yet.",
+    },
   },
-  required: ['background', 'relevantFiles', 'openQuestions', 'firstSteps'],
+  required: ['background', 'relevantFiles', 'openQuestions', 'firstSteps', 'tasks'],
 };
 
 const handoffRules = (name = userName()) =>
@@ -278,10 +299,13 @@ function templateParts({ origin, src, related, ideaText, name, goal }) {
     openQuestions: questions.slice(0, 6),
     firstSteps: steps,
     // Template mode makes one task in the new project instead of copying boilerplate steps into the task list.
-    tasks: [`Plan the first version of ${name}`],
-    taskDetail: goal,
+    ...starterTask(name, goal),
   };
 }
+
+/** New projects get at most this many starter tasks (the user's to-dos, not Claude's first steps). */
+export const MAX_STARTER_TASKS = 2;
+const starterTask = (name, goal) => ({ tasks: [clip(`Plan the first version of ${name}`, 80)], taskDetail: goal });
 
 export function renderHandoff({ name, goal, origin, src, parts, generatedBy, now = Date.now() }) {
   const L = [`# ${name}`, ''];
@@ -321,6 +345,7 @@ function cleanAIParts(data, src) {
     relevantFiles,
     openQuestions: arr(data?.openQuestions, 8, 300),
     firstSteps: arr(data?.firstSteps, 8, 300),
+    tasks: arr(data?.tasks, MAX_STARTER_TASKS, 60), // the user's to-dos (firstSteps are Claude's, in CLAUDE.md)
   };
 }
 
@@ -373,14 +398,17 @@ export async function buildHandoff({ name, goal, origin = null, src = null, rela
       if (r?.ok && r.data && typeof r.data === 'object') {
         parts = cleanAIParts(r.data, src);
         if (!parts.firstSteps.length) parts = null;
-        else generatedBy = 'ai';
+        else {
+          generatedBy = 'ai';
+          if (!parts.tasks.length) Object.assign(parts, starterTask(name, goal)); // nothing for the user yet: one planning task
+        }
       } else aiError = r?.error || 'AI call failed';
     } catch (e) {
       aiError = e.message;
     }
   }
   if (!parts) parts = templateParts({ origin, src, related, ideaText, name, goal });
-  const tasks = (parts.tasks || parts.firstSteps).map((title) => ({ title, detail: parts.taskDetail || title }));
+  const tasks = (parts.tasks || []).slice(0, MAX_STARTER_TASKS).map((title) => ({ title, detail: parts.taskDetail || title }));
   return { markdown: renderHandoff({ name, goal, origin, src, parts, generatedBy, now }), generatedBy, aiError, firstSteps: parts.firstSteps, tasks };
 }
 
@@ -389,9 +417,23 @@ export async function createProjectFolder(plan, markdown, { gitInit = false, hom
   // Re-check right before writing: the AI call may have taken a while.
   const again = planFolder({ name: plan.slug, parentDir: plan.parent, home });
   if (again.dir !== plan.dir) throw new HttpError(409, 'The target folder changed; try again');
-  fs.mkdirSync(plan.dir, { mode: 0o755 });
+  // Folders it goes in that don't exist yet, outermost first (rolled back with the project folder on failure).
+  const newParents = [];
+  if (again.newParent) {
+    const stop = path.dirname(again.newParent);
+    for (let d = plan.parent; d !== stop && d !== path.dirname(d); d = path.dirname(d)) newParents.unshift(d);
+  }
+  const madeParents = [];
+  let madeDir = false;
   let wrote = false;
   try {
+    for (const d of newParents) {
+      fs.mkdirSync(d, { mode: 0o755 });
+      madeParents.push(d);
+    }
+    if (fs.realpathSync(plan.parent) !== plan.parent) throw new HttpError(400, 'Unexpected link in the new folder path');
+    fs.mkdirSync(plan.dir, { mode: 0o755 });
+    madeDir = true;
     fs.chmodSync(plan.dir, 0o755);
     if (fs.realpathSync(plan.dir) !== plan.dir) throw new HttpError(400, 'Unexpected link in the new folder path');
     fs.writeFileSync(path.join(plan.dir, 'CLAUDE.md'), markdown, { flag: 'wx', mode: 0o644 });
@@ -399,7 +441,8 @@ export async function createProjectFolder(plan, markdown, { gitInit = false, hom
   } catch (e) {
     try {
       if (wrote) fs.unlinkSync(path.join(plan.dir, 'CLAUDE.md'));
-      fs.rmdirSync(plan.dir);
+      if (madeDir) fs.rmdirSync(plan.dir);
+      for (const d of [...madeParents].reverse()) fs.rmdirSync(d);
     } catch {}
     throw e;
   }
@@ -423,4 +466,4 @@ export function cleanName(s) {
   return clip(oneLine(s).replace(/[\u0000-\u001f<>`]/g, ''), 80);
 }
 
-export const firstStepTitle = (s) => toTitle(s, 110);
+export const firstStepTitle = (s) => toTitle(s, 80);

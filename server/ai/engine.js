@@ -21,6 +21,7 @@ const SETUP_PAUSE = 30 * 60e3; // logged out, bad key, no credit: waits longer, 
 const FLAKY_STRIKES = 3; // the same input timing out / erroring this often...
 const FLAKY_BACKOFF = 6 * 3600e3; // ...is set aside this long, so it can't hold up the rest
 const PROJECT_CODE = /\bp(\d{1,2})\b/gi; // daily-brief project ids (p1..p25)
+export const WHO = new Set(['you', 'claude', 'waiting']); // who does a next step (digest.who, brief.whos)
 
 const fmt = (t) => (t ? new Date(t).toISOString().slice(0, 16).replace('T', ' ') : '?');
 
@@ -140,13 +141,19 @@ const BLOCK_SCHEMA = {
     summary: { type: 'string', description: '1-2 sentences: what this work was about' },
     outcome: { type: 'string', description: '1-2 sentences: what was actually achieved or where it stopped' },
     status: { type: 'string', enum: ['done', 'in_progress', 'blocked', 'abandoned', 'ongoing'] },
-    nextStep: { type: 'string', description: 'The concrete next step if not done, else empty string' },
+    nextStep: { type: 'string', description: 'If not done: what a new Claude session needs to continue, 1-2 sentences with the specifics (files, commands, names). Else empty string.' },
+    todo: {
+      type: 'string',
+      description:
+        'If not done: the same next step as a to-do the user reads on a phone. 3-7 words, verb first, plain words. No file names, paths, commands, env vars, dates, reasons or conditions; never "then", "since", "before", "after", "once". Examples: "Fix the double reminder emails", "Ask the printer for a new quote", "Retest checkout on a real phone". Else empty string.',
+    },
+    who: { type: 'string', enum: ['you', 'claude', 'waiting'], description: 'Who does the next step: you = the user acts by hand (call, decide, send, test on a device); claude = a Claude session can do it; waiting = blocked on someone else. "claude" when done.' },
     topic: { type: 'string', description: '2-4 word stable label for the thread of work this belongs to (e.g. "Payroll export", "Clinic outreach", "Landing page")' },
     kind: { type: 'string', enum: ['build', 'fix', 'research', 'ops', 'writing', 'design', 'planning', 'outreach', 'learning', 'other'] },
     cvWorthy: { type: 'boolean', description: 'Would this be worth mentioning on a CV/portfolio?' },
     highlights: { type: 'array', items: { type: 'string' }, description: '0-3 concrete achievements, phrased for a CV (past tense, specific, with numbers if present)' },
   },
-  required: ['title', 'summary', 'outcome', 'status', 'nextStep', 'topic', 'kind', 'cvWorthy', 'highlights'],
+  required: ['title', 'summary', 'outcome', 'status', 'nextStep', 'todo', 'who', 'topic', 'kind', 'cvWorthy', 'highlights'],
 };
 
 const BRIEF_SCHEMA = {
@@ -156,7 +163,14 @@ const BRIEF_SCHEMA = {
     oneLiner: { type: 'string', description: 'What this project is, max 14 words' },
     description: { type: 'string', description: '2-4 sentences: purpose, users/client, what exists today' },
     currentState: { type: 'string', description: '1-2 sentences: where things stand right now' },
-    nextSteps: { type: 'array', items: { type: 'string' }, description: 'Up to 5 concrete next steps, most important first' },
+    nextSteps: {
+      type: 'array',
+      items: { type: 'string' },
+      description:
+        'Up to 3 open pieces of work, most important first, one sentence each (max 20 words). Merge steps about the same thing. Never standing rules from CLAUDE.md or memory (e.g. "run the lint before publishing", "never push to main"), never "check whether X is still true/relevant", never git housekeeping (commit, push, worktrees). Empty if nothing is open.',
+    },
+    todos: { type: 'array', items: { type: 'string' }, description: 'Same length and order as nextSteps: each one as a 3-7 word to-do, verb first, plain words, no file names, commands, dates or reasons.' },
+    whos: { type: 'array', items: { type: 'string', enum: ['you', 'claude', 'waiting'] }, description: 'Same length and order as nextSteps: you = the user acts by hand; claude = a Claude session can do it; waiting = blocked on someone else.' },
     threads: {
       type: 'array',
       description: 'Group the work blocks into 1-8 threads (distinct lines of work inside this folder). Every block id appears in exactly one thread.',
@@ -184,28 +198,33 @@ const BRIEF_SCHEMA = {
       required: ['title', 'role', 'bullets'],
     },
   },
-  required: ['oneLiner', 'description', 'currentState', 'nextSteps', 'threads', 'attention', 'cv'],
+  required: ['oneLiner', 'description', 'currentState', 'nextSteps', 'todos', 'whos', 'threads', 'attention', 'cv'],
 };
 
 const DAILY_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    headline: { type: 'string', description: 'One encouraging, specific sentence about the state of things' },
+    headline: { type: 'string', description: 'Max 12 words, fragments ok: the state of things today' },
     focus: {
       type: 'array',
-      description: '2-4 suggested focuses for today',
+      description: 'Up to 3 things that must happen today (a deadline, someone waiting, a job running tonight). If one matches an open task on stdin, copy that task title exactly.',
       items: {
         type: 'object',
         additionalProperties: false,
-        properties: { project: { type: 'string', description: 'project id like p2' }, title: { type: 'string' }, why: { type: 'string' }, action: { type: 'string', description: 'A first prompt the user could give Claude to start' } },
+        properties: {
+          project: { type: 'string', description: 'project id like p2' },
+          title: { type: 'string', description: '3-7 words, verb first, plain words' },
+          why: { type: 'string', description: 'Max 14 words, one clause: why today. No recap.' },
+          action: { type: 'string', description: 'A first prompt the user could give Claude to start' },
+        },
         required: ['project', 'title', 'why', 'action'],
       },
     },
     forgotten: {
       type: 'array',
       description: 'Up to 4 things that slipped',
-      items: { type: 'object', additionalProperties: false, properties: { project: { type: 'string', description: 'project id like p2' }, note: { type: 'string' } }, required: ['project', 'note'] },
+      items: { type: 'object', additionalProperties: false, properties: { project: { type: 'string', description: 'project id like p2' }, note: { type: 'string', description: 'Max 15 words' } }, required: ['project', 'note'] },
     },
     ideas: { type: 'array', items: { type: 'string' }, description: '2-4 fresh ideas that connect their projects or skills (concrete, not generic)' },
   },
@@ -235,6 +254,9 @@ function systemRules(name = userName()) {
     'Never use internal words like "work block", "block", "digest", "brief" or "thread" in what you write: say "session", "work" or "summary".'
   );
 }
+
+/** Said in every prompt whose short fields end up on Home or in Tasks. */
+const SHORT_RULE = 'Short fields (to-dos, titles, why, notes) are read on a phone: write them for the user, not for Claude.';
 
 const AI_BACKUPS_KEPT = 3;
 
@@ -472,7 +494,7 @@ export class AIEngine extends EventEmitter {
     const input = this.buildBlockInput(meta, block, project);
     const r = await callAI({
       purpose: 'digest',
-      instruction: `${systemRules()} Summarize the work block described on stdin into the JSON schema. Do not mention "the input", "the log" or "the block"; just describe the work. If replies are missing, summarize what was asked.`,
+      instruction: `${systemRules()} Summarize the work block described on stdin into the JSON schema. Do not mention "the input", "the log" or "the block"; just describe the work. If replies are missing, summarize what was asked. ${SHORT_RULE} In "todo", never write "${userName()}", "the user" or "Claude".`,
       input,
       schema: BLOCK_SCHEMA,
       model: this.settings.digestModel,
@@ -609,7 +631,7 @@ export class AIEngine extends EventEmitter {
     const { input, hash: h, ids, bb } = this.buildBriefInput(project);
     const r = await callAI({
       purpose: 'brief',
-      instruction: `${systemRules()} Write a brief for the project described on stdin, and group its work blocks into threads. Fill the JSON schema. Block ids (b1, b2...) belong only in threads[].blocks; never mention them in any text field. Write the text as of today; do not say "the input" or "the log".`,
+      instruction: `${systemRules()} Write a brief for the project described on stdin, and group its work blocks into threads. Fill the JSON schema. Block ids (b1, b2...) belong only in threads[].blocks; never mention them in any text field. Write the text as of today; do not say "the input" or "the log". ${SHORT_RULE} In "todos", never write "${userName()}", "the user" or "Claude".`,
       input,
       schema: BRIEF_SCHEMA,
       model: this.settings.briefModel,
@@ -642,7 +664,7 @@ export class AIEngine extends EventEmitter {
         oneLiner: clip(brief.oneLiner, 160),
         description: clip(brief.description, 900),
         currentState: clip(brief.currentState, 500),
-        nextSteps: (brief.nextSteps || []).slice(0, 6).map((s) => clip(s, 240)),
+        ...briefSteps(brief),
         attention: (brief.attention || []).slice(0, 5).map((s) => clip(s, 240)),
         cv: brief.cv || null,
         threads,
@@ -780,7 +802,7 @@ export class AIEngine extends EventEmitter {
     const { input, ids } = this.buildDailyInput(overview);
     const r = await callAI({
       purpose: 'daily',
-      instruction: `${systemRules()} You are ${userName()}'s chief of staff. From the state of their projects on stdin, write today's brief. Fill the JSON schema. Each listed project has an id (p1, p2, ...): put it only in the "project" fields. Everywhere else (headline, title, why, action, note, ideas) call projects by their names, never by id.`,
+      instruction: `${systemRules()} You are ${userName()}'s chief of staff. From the state of their projects on stdin, write today's brief. Fill the JSON schema. Each listed project has an id (p1, p2, ...): put it only in the "project" fields. Everywhere else (headline, title, why, action, note, ideas) call projects by their names, never by id. ${SHORT_RULE}`,
       input,
       schema: DAILY_SCHEMA,
       model: this.settings.briefModel,
@@ -794,7 +816,7 @@ export class AIEngine extends EventEmitter {
       at: Date.now(),
       // same-day rewrites (afternoon refresh after new work); needDaily caps them
       refreshes: prev && prev.day === isoDay(Date.now()) ? (prev.refreshes || 0) + 1 : 0,
-      brief: this.nameDaily({ headline: d.headline, focus: (d.focus || []).slice(0, 4), forgotten: (d.forgotten || []).slice(0, 5), ideas: (d.ideas || []).slice(0, 5) }, ids),
+      brief: this.nameDaily({ headline: d.headline, focus: (d.focus || []).slice(0, 3), forgotten: (d.forgotten || []).slice(0, 5), ideas: (d.ideas || []).slice(0, 5) }, ids),
     };
     return r;
   }
@@ -1012,13 +1034,30 @@ function friendlyError(msg = '') {
   return msg;
 }
 
-function sanitizeDigest(d = {}) {
+/** A brief's open work: nextSteps (Claude-facing) with todos/whos parallel to it (index i = step i), so every reader
+ *  of nextSteps keeps working and work/extract.js can pick the short to-do of step i. */
+export function briefSteps(brief = {}) {
+  const at = (arr, i) => (Array.isArray(arr) ? arr[i] : undefined);
+  const steps = (Array.isArray(brief.nextSteps) ? brief.nextSteps : [])
+    .map((s, i) => ({ text: clip(oneLine(s), 240), i }))
+    .filter((x) => x.text)
+    .slice(0, 3);
+  return {
+    nextSteps: steps.map((x) => x.text),
+    todos: steps.map((x) => clip(oneLine(at(brief.todos, x.i)), 60)),
+    whos: steps.map((x) => (WHO.has(at(brief.whos, x.i)) ? at(brief.whos, x.i) : null)),
+  };
+}
+
+export function sanitizeDigest(d = {}) {
   return {
     title: clip(oneLine(d.title), 90),
     summary: clip(oneLine(d.summary), 400),
     outcome: clip(oneLine(d.outcome), 400),
     status: d.status,
     nextStep: clip(oneLine(d.nextStep), 240),
+    todo: clip(oneLine(d.todo), 60),
+    who: WHO.has(d.who) ? d.who : null,
     topic: clip(oneLine(d.topic), 50),
     kind: d.kind,
     cvWorthy: !!d.cvWorthy,

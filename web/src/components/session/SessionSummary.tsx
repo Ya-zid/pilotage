@@ -1,12 +1,11 @@
-// Summary of a session, one card: the AI summaries (latest part of the session first), then Claude's own recap
-// as a disclosure inside the same card. Each open next step shows whether it is already a task; the whole
-// session can be spun off into a new project.
+// Summary of a session, one folded card: the AI summaries (latest part of the session first), then Claude's own recap
+// as a disclosure inside the same card. Each open part's ⋯ adds its next step as a task (or says it already is one).
 import React, { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Check, ChevronRight, CornerDownRight, ListPlus, Split } from 'lucide-react';
+import { Check, ChevronRight, CornerDownRight, ListPlus, MoreHorizontal } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { api, useInvalidate } from '../../api';
-import { Button, ClampText, Disclosure, Meta, StatusIcon, useToast } from '../ui';
+import { ClampText, Disclosure, IconButton, Meta, StatusIcon, useToast } from '../ui';
+import { Menu, type MenuEntry } from '../project/Menu';
 import { ago, fmtDate, fmtDateTime, plural } from '../../util';
 import type { BlockView, SessionDetail } from '../../types';
 import type { WorkItem, WorkList } from '../../types-extra';
@@ -21,16 +20,25 @@ function blockRange(b: BlockView) {
   return a === z ? a : `${a} → ${z}`;
 }
 
-function NextStep({ s, b, existing }: { s: SessionDetail; b: BlockView; existing: WorkItem | undefined }) {
+/** The block's ⋯: add its next step as a task, or say which task it already is. */
+function useBlockTask(s: SessionDetail, b: BlockView, existing: WorkItem | undefined): MenuEntry[] {
   const d = b.digest!;
   const toast = useToast();
   const inv = useInvalidate();
-  const [busy, setBusy] = useState(false);
   const [added, setAdded] = useState<WorkItem | null>(null);
   const item = added || existing;
+  if (!s.projectId || !d.nextStep) return [];
+  if (item)
+    return [
+      {
+        label: item.status === 'done' || item.status === 'dropped' ? `Task ${WORK_LABEL[item.status].toLowerCase()}` : `In Tasks · ${WORK_LABEL[item.status] || item.status}`,
+        icon: <Check />,
+        hint: item.title,
+        disabled: true,
+        onSelect: () => {},
+      },
+    ];
   const add = () => {
-    if (!s.projectId) return;
-    setBusy(true);
     const title = clipWords(d.nextStep, 190);
     api<WorkItem>('/api/work', {
       method: 'POST',
@@ -41,53 +49,45 @@ function NextStep({ s, b, existing }: { s: SessionDetail; b: BlockView; existing
         toast(`Added to ${s.projectName || 'project'} tasks`);
         inv('work', 'overview', 'project');
       })
-      .catch((e) => toast(e.message, true))
-      .finally(() => setBusy(false));
+      .catch((e) => toast(e.message, true));
   };
-  return (
-    <div className="sx-next">
-      <div className="next-step">
-        <CornerDownRight size={13} />
-        <span className="break">{d.nextStep}</span>
-      </div>
-      {s.projectId &&
-        (item ? (
-          <span className="sx-intasks" title={item.title}>
-            <Check size={13} /> {item.status === 'done' || item.status === 'dropped' ? `Task ${WORK_LABEL[item.status].toLowerCase()}` : `In Tasks · ${WORK_LABEL[item.status] || item.status}`}
-          </span>
-        ) : (
-          <Button size="sm" variant="ghost" icon={<ListPlus />} loading={busy} onClick={add} title="Add this next step to the project's tasks">
-            Add as task
-          </Button>
-        ))}
-    </div>
-  );
+  return [{ label: 'Add the next step as a task', icon: <ListPlus />, onSelect: add }];
 }
 
 function BlockDigest({ s, b, existing, live }: { s: SessionDetail; b: BlockView; existing: WorkItem | undefined; live: boolean }) {
   const d = b.digest!;
   const open = d.status !== 'done' && d.status !== 'abandoned';
+  const menu = useBlockTask(s, b, existing);
   return (
     <div className="sx-block">
       <div className="sx-block-lead">
         <StatusIcon status={live ? 'idle_live' : d.status} title={live ? 'Session is running' : undefined} />
       </div>
       <div className="sx-block-body">
-        <div className="sx-block-title">{d.title || b.fallbackTitle}</div>
-        <Meta items={[<span title={`${fmtDateTime(b.startAt)} → ${fmtDateTime(b.endAt)}`}>{blockRange(b)}</span>, b.prompts > 0 ? plural(b.prompts, 'prompt') : null, d.topic || null]} />
+        <div className="sx-block-head">
+          <div className="sx-block-title">{d.title || b.fallbackTitle}</div>
+          {open && menu.length > 0 && (
+            <Menu label="Part actions" sheetTitle={d.title || b.fallbackTitle} items={menu} trigger={(t) => <IconButton {...t} icon={<MoreHorizontal />} label="More actions" className="sx-block-menu" />} />
+          )}
+        </div>
+        <Meta items={[<span title={`${fmtDateTime(b.startAt)} → ${fmtDateTime(b.endAt)}`}>{blockRange(b)}</span>, b.prompts > 0 ? plural(b.prompts, 'prompt') : null]} />
         {(d.outcome || d.summary) && (
           <ClampText lines={2} className="sx-block-text">
             {d.outcome || d.summary}
           </ClampText>
         )}
-        {d.nextStep && open && <NextStep s={s} b={b} existing={existing} />}
+        {d.nextStep && open && (
+          <div className="next-step sx-nextline">
+            <CornerDownRight size={13} />
+            <span className="clamp-2 break">{d.nextStep}</span>
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
 export function SessionSummary({ s, collapsible }: { s: SessionDetail; collapsible: boolean }) {
-  const navigate = useNavigate();
   const [open, setOpen] = useState(!collapsible);
   const [all, setAll] = useState(false);
   const pid = s.projectId;
@@ -103,11 +103,6 @@ export function SessionSummary({ s, collapsible }: { s: SessionDetail; collapsib
   };
 
   const shown = all ? digests : digests.slice(0, 4);
-  const spin = s.projectId ? (
-    <Button size="sm" variant="ghost" icon={<Split />} onClick={() => navigate(`/projects/${s.projectId}?spinoff=1&session=${encodeURIComponent(s.id)}`)} title="Start a new project from this session's work">
-      Spin off into a new project…
-    </Button>
-  ) : null;
 
   const recap = s.recap ? (
     <Disclosure
@@ -147,7 +142,6 @@ export function SessionSummary({ s, collapsible }: { s: SessionDetail; collapsib
         </div>
       )}
       {recap}
-      {collapsible && spin && <div className="sx-summary-spin">{spin}</div>}
     </div>
   );
 
@@ -167,7 +161,6 @@ export function SessionSummary({ s, collapsible }: { s: SessionDetail; collapsib
     <div className="card sx-summary">
       <div className="card-head">
         <h2>Summary</h2>
-        {spin}
       </div>
       {body}
     </div>

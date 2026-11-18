@@ -1,14 +1,16 @@
-// Running sessions (moved here from the old Live page): one row per running session with its actions
-// (Open in Claude app · View · Attach on PC · Stop), the Needs you / Working / Open groups, and the
-// "Started from Pilotage" launches. Used by Sessions and the project page.
+// Running sessions: one calm row per running session (glyph + state badge · title · project · time) with one icon
+// action (open in the Claude app); Attach on PC / Stop sit in a ⋯ menu. Groups: Needs you · Running (working first,
+// then open/idle, the idle tail folded). Also the "Started from Pilotage" launches. Used by Sessions and the project page.
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { CheckCircle2, Cloud, Monitor, Smartphone, Square } from 'lucide-react';
+import { CheckCircle2, GitBranch, Monitor, MoreHorizontal, Smartphone, Square } from 'lucide-react';
 import { api, useInvalidate, useWsl } from '../../api';
-import { Button, Card, Disclosure, IconButton, Meta, ProjectGlyph, Section, Snippet, Spinner, StatusIcon, Tooltip, useToast } from '../ui';
+import { Card, Disclosure, IconButton, Meta, Section, Snippet, Spinner, StatusIcon, useToast } from '../ui';
 import type { Launch, SessionSummary } from '../../types';
 import { ago, fmtDateTime } from '../../util';
-import { HARNESS_LABEL, RUN_LABEL, errText, harnessOf, runLabel, runState, sortRunning, type RunState } from './shared';
+import { GlyphStatus } from '../cards';
+import { Menu, type MenuEntry } from '../project/Menu';
+import { HARNESS_LABEL, branchOf, errText, harnessOf, projectNameOf, runLabel, runState, sameName, sortRunning, usefulDetail } from './shared';
 import './live.css';
 
 export function HarnessTag({ s }: { s: Pick<SessionSummary, 'harness'> }) {
@@ -17,13 +19,35 @@ export function HarnessTag({ s }: { s: Pick<SessionSummary, 'harness'> }) {
   return <span className="sx-harness">{HARNESS_LABEL[h]}</span>;
 }
 
+/** The one row action: open the session in the Claude app (icon only). Nothing when there's no app link. */
+export function AppLink({ url, className = '' }: { url: string | null | undefined; className?: string }) {
+  if (!url) return null;
+  return (
+    <a className={`btn ghost icon sx-app ${className}`} href={url} target="_blank" rel="noreferrer" aria-label="Open in Claude app" title="Open in Claude app">
+      <Smartphone />
+    </a>
+  );
+}
+
+export function BranchBit({ name }: { name: string }) {
+  return (
+    <span className="sx-branch" title={`Branch or worktree ${name}`}>
+      <GitBranch aria-hidden="true" />
+      <span className="truncate">{name}</span>
+    </span>
+  );
+}
+
 export function LiveSessionRow({ s, showProject = true }: { s: SessionSummary; showProject?: boolean }) {
   const toast = useToast();
   const inv = useInvalidate();
+  const wsl = useWsl();
   const l = s.live!;
   const st = runState(s);
   const bg = l.kind === 'background';
-  const text = l.detail || s.lastPrompt;
+  const detail = usefulDetail(l.detail, st === 'needs-you');
+  const proj = projectNameOf(s);
+  const branch = branchOf(s);
   const stop = () => {
     if (!confirm(`Stop “${s.title}”? The conversation is kept and can be resumed later.`)) return;
     api(`/api/sessions/${s.id}/stop`, { method: 'POST' })
@@ -33,66 +57,45 @@ export function LiveSessionRow({ s, showProject = true }: { s: SessionSummary; s
       })
       .catch((e) => toast(errText(e), true));
   };
-  const wsl = useWsl();
   const attach = () =>
     api(`/api/sessions/${s.id}/attach`, { method: 'POST' })
       .then(() => toast('Opened in Windows Terminal'))
       .catch((e) => toast(errText(e), true));
+  const menu: MenuEntry[] = [];
+  if (bg && l.bgId) {
+    if (wsl) menu.push({ label: 'Attach on PC', icon: <Monitor />, hint: 'Bring it into a Windows Terminal tab', onSelect: attach });
+    menu.push({ label: 'Stop', icon: <Square />, danger: true, hint: 'The conversation is kept', onSelect: stop });
+  }
   return (
     <div className={`lrow clickable live-srow st-${st}`}>
       <Link to={`/sessions/${s.id}`} className="lrow-link" aria-label={`${s.title} (${runLabel(s)})`} />
-      <div className="lrow-lead">
-        <StatusIcon status={st} title={runLabel(s)} />
-      </div>
+      <div className="lrow-lead">{showProject ? <GlyphStatus name={proj} ws={s.workspace} size={24} status={st} statusTitle={runLabel(s)} /> : <StatusIcon status={st} title={runLabel(s)} />}</div>
       <div className="lrow-body">
         <div className="lrow-title">
           <span className="t">{s.title}</span>
           <HarnessTag s={s} />
         </div>
-        {text && <Snippet text={text} lines={st === 'needs-you' ? 2 : 1} quote={!l.detail} className="lrow-sub" />}
+        {detail && <Snippet text={detail} lines={st === 'needs-you' ? 2 : 1} className="lrow-sub sx-detail-line" />}
         <Meta
           items={[
-            showProject ? (
-              <span className="sx-proj-meta">
-                {s.workspace && <ProjectGlyph name={s.projectName || s.cwd} ws={s.workspace} size={14} />}
-                <span className="truncate">{s.projectName || s.cwd.split('/').pop()}</span>
-              </span>
-            ) : null,
-            <span className="mi" title={bg ? 'Runs in the background on your PC, no window' : 'Runs in a Windows Terminal tab on your PC'}>
-              {bg ? <Cloud /> : <Monitor />}
-              {bg ? 'Background' : 'Terminal'}
-            </span>,
-            s.worktree ? <span className="truncate live-branch" title={`Worktree ${s.worktree}`}>{s.worktree}</span> : s.branch ? <span className="truncate live-branch" title={`Branch ${s.branch}`}>{s.branch}</span> : null,
+            showProject && !sameName(proj, s.title) ? <span className="truncate sx-proj-name">{proj}</span> : null,
+            bg ? <span title="Runs in the background on your PC, no window">Background</span> : null,
+            branch ? <BranchBit name={branch} /> : null,
             <span title={`Last activity ${fmtDateTime(s.lastAt)}`}>{ago(s.lastAt)}</span>,
           ]}
         />
       </div>
-      <div className="live-srow-actions">
-        {l.bridgeUrl ? (
-          <a className="btn sm live-open" href={l.bridgeUrl} target="_blank" rel="noreferrer">
-            <Smartphone /> Open in Claude app
-          </a>
-        ) : (
-          <span className="tiny faint live-nolink" title="This session was started without Remote Control, so the Claude app can’t open it">
-            No app link
-          </span>
-        )}
-        <Link className="btn sm ghost live-view" to={`/sessions/${s.id}`}>
-          View
-        </Link>
-        {bg && l.bgId && (
-          <>
-            {wsl && (
-              <Tooltip label="Bring it into a Windows Terminal tab">
-                <Button size="sm" variant="ghost" icon={<Monitor />} className="hide-mobile" onClick={attach}>
-                  Attach on PC
-                </Button>
-              </Tooltip>
-            )}
-            <IconButton icon={<Square />} label="Stop this background session" className="live-stop" onClick={stop} />
-          </>
-        )}
-      </div>
+      {st === 'working' && <span className="live-word st-word-working sx-state-word">Working</span>}
+      {(l.bridgeUrl || menu.length > 0) && (
+        <div className="live-srow-actions">
+          <AppLink url={l.bridgeUrl} />
+          {menu.length > 0 && (
+            <span className="hide-mobile">
+              <Menu label="Session actions" sheetTitle={s.title} items={menu} trigger={(t) => <IconButton {...t} icon={<MoreHorizontal />} label="More actions" />} />
+            </span>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -102,7 +105,7 @@ export function LaunchRow({ l }: { l: Launch }) {
   const failed = l.state === 'error';
   const project = l.cwd.split('/').filter(Boolean).pop() || l.cwd;
   return (
-    <div className={`lrow launch-row${l.sessionId ? ' clickable' : ''}`}>
+    <div className={`lrow launch-row live-srow${l.sessionId ? ' clickable' : ''}`}>
       {l.sessionId && <Link to={`/sessions/${l.sessionId}`} className="lrow-link" aria-label={l.name} />}
       <div className="lrow-lead">{failed ? <StatusIcon status="error" title="Didn’t start" /> : ready ? <CheckCircle2 size={15} className="faint" aria-label="Running" /> : <Spinner size={14} />}</div>
       <div className="lrow-body">
@@ -116,54 +119,59 @@ export function LaunchRow({ l }: { l: Launch }) {
         ) : null}
         <Meta
           items={[
-            <span className="mi">
-              {l.mode === 'background' ? <Cloud /> : <Monitor />}
-              {l.mode === 'background' ? 'Background' : 'Terminal'}
-            </span>,
-            <span title={l.cwd}>{project}</span>,
+            sameName(project, l.name) ? null : <span title={l.cwd}>{project}</span>,
+            l.mode === 'background' ? 'Background' : null,
             <span title={fmtDateTime(l.createdAt)}>started {ago(l.createdAt)}</span>,
           ]}
         />
       </div>
       {ready && (
         <div className="live-srow-actions">
-          <a className="btn sm live-open" href={l.bridgeUrl!} target="_blank" rel="noreferrer">
-            <Smartphone /> Open in Claude app
-          </a>
+          <AppLink url={l.bridgeUrl} />
         </div>
       )}
     </div>
   );
 }
 
-const GROUPS: RunState[] = ['needs-you', 'working', 'idle_live'];
+/** Idle sessions shown before the rest fold behind "+N idle". */
+const IDLE_SHOWN = 4;
 
-/** Needs you (amber) · Working · Open (idle, folded to `foldOpen` + "Show N more"). Each group only when non-empty. */
-export function RunningGroups({ live, showProject = true, foldOpen = 3 }: { live: SessionSummary[]; showProject?: boolean; foldOpen?: number }) {
-  const [allOpen, setAllOpen] = useState(false);
+/** Needs you (amber, only when any) · Running (working first, then open/idle; a long idle tail folds). */
+export function RunningGroups({ live, showProject = true }: { live: SessionSummary[]; showProject?: boolean; foldOpen?: number }) {
+  const [allIdle, setAllIdle] = useState(false);
   const list = sortRunning(live);
+  const needs = list.filter((s) => runState(s) === 'needs-you');
+  const running = list.filter((s) => runState(s) !== 'needs-you');
+  const idle = running.filter((s) => runState(s) === 'idle_live');
+  const working = running.length - idle.length;
+  const fold = !allIdle && idle.length > IDLE_SHOWN + 1;
+  const shown = fold ? running.slice(0, working + IDLE_SHOWN) : running;
   return (
     <>
-      {GROUPS.map((g) => {
-        const items = list.filter((s) => runState(s) === g);
-        if (!items.length) return null;
-        const folded = g === 'idle_live' && !allOpen && items.length > foldOpen + 1;
-        const shown = folded ? items.slice(0, foldOpen) : items;
-        return (
-          <Section key={g} title={<span className="sx-group-title"><StatusIcon status={g} />{RUN_LABEL[g]}</span>} count={items.length}>
-            <Card flush className={`live-group live-${g}`}>
-              {shown.map((s) => (
-                <LiveSessionRow key={s.id} s={s} showProject={showProject} />
-              ))}
-              {g === 'idle_live' && items.length > foldOpen + 1 && (
-                <button type="button" className="live-fold" onClick={() => setAllOpen(!allOpen)} aria-expanded={allOpen}>
-                  {allOpen ? 'Show fewer' : `Show ${items.length - foldOpen} more open`}
-                </button>
-              )}
-            </Card>
-          </Section>
-        );
-      })}
+      {needs.length > 0 && (
+        <Section title="Needs you" count={needs.length}>
+          <Card flush className="live-group live-needs-you">
+            {needs.map((s) => (
+              <LiveSessionRow key={s.id} s={s} showProject={showProject} />
+            ))}
+          </Card>
+        </Section>
+      )}
+      {running.length > 0 && (
+        <Section title="Running" count={running.length}>
+          <Card flush className="live-group">
+            {shown.map((s) => (
+              <LiveSessionRow key={s.id} s={s} showProject={showProject} />
+            ))}
+            {idle.length > IDLE_SHOWN + 1 && (
+              <button type="button" className="live-fold" onClick={() => setAllIdle(!allIdle)} aria-expanded={allIdle}>
+                {allIdle ? 'Show fewer' : `+${idle.length - IDLE_SHOWN} idle`}
+              </button>
+            )}
+          </Card>
+        </Section>
+      )}
     </>
   );
 }

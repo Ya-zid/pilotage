@@ -1,19 +1,19 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation, useMatch, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { Briefcase, CircleHelp, FolderKanban, History, Home, Lightbulb, ListChecks, MessagesSquare, MoreHorizontal, Plus, Search, Settings, SquareTerminal, TriangleAlert } from 'lucide-react';
+import { ArrowRight, Briefcase, CircleHelp, FolderKanban, History, Home, Lightbulb, ListChecks, MessagesSquare, MoreHorizontal, Play, Plus, Search, Settings, SquareTerminal, TriangleAlert } from 'lucide-react';
 import { useBootstrap, useOverview, useProjects } from '../api';
-import type { SessionDetail, SessionSummary } from '../types';
+import type { ProjectSummary, SessionDetail, SessionSummary } from '../types';
 import { useApp } from './AppContext';
-import { EmptyState, Kbd, Meter, USAGE_LABELS, WorkspaceAvatar } from './ui';
+import { EmptyState, Kbd, Meter, ProjectGlyph, USAGE_LABELS } from './ui';
 import { fmtTime, plural } from '../util';
-import { liveState, runningWord, type RunCounts } from './cards';
+import { liveState, runningWord, useRunningByProject } from './cards';
 import { NewSessionModal } from './NewSession';
 import { CommandPalette } from './CommandPalette';
 import { Menu } from './tasks/TaskBits';
 import { InstallHint } from './InstallHint';
 
-const WS_VISIBLE = 8;
+const RECENT_PROJECTS = 5;
 
 /** Running sessions by state: what the Sessions badge and the workspace presence dots show. */
 export function runningCounts(live: SessionSummary[] | undefined) {
@@ -50,6 +50,14 @@ function SessionsBadge({ live, phone = false }: { live: SessionSummary[] | undef
   );
 }
 
+/** Tasks that matter today: planned for today (open) plus anything in Doing. Shown on the phone's More tab. */
+export function useTodayTaskCount() {
+  const { data: o } = useOverview();
+  const today = o?.plan?.today || [];
+  const doing = o?.work?.doingCount || 0;
+  return today.length + doing - today.filter((t) => t.status === 'doing').length;
+}
+
 function UsageBox() {
   const { data } = useOverview();
   const u = data?.usage;
@@ -69,49 +77,77 @@ function UsageBox() {
   );
 }
 
+/** The projects worked on most recently, running ones first. */
+function recentProjects(projects: ProjectSummary[] | undefined, n = RECENT_PROJECTS) {
+  const now = Date.now();
+  const at = (p: ProjectSummary) => (p.liveCount > 0 ? now : p.lastSessionAt || p.lastAt);
+  return [...(projects || [])]
+    .filter((p) => p.status !== 'archived')
+    .sort((a, b) => at(b) - at(a))
+    .slice(0, n);
+}
+
+/** Sidebar "Recent projects": one click to a project, one more (▶ on hover) to start a session there. */
+function RecentProjects({ recent, curProject }: { recent: ProjectSummary[]; curProject: string | null }) {
+  const { openNewSession } = useApp();
+  const running = useRunningByProject();
+  if (!recent.length) return null;
+  return (
+    <div className="nav-recent">
+      <div className="nav-section">
+        <span>Recent projects</span>
+      </div>
+      {recent.map((p) => {
+        const run = runningWord(running.get(p.id), p.liveCount);
+        const st = run ? (run.state === 'idle_live' ? 'open' : run.state) : null;
+        return (
+          <div key={p.id} className={`nav-item proj${curProject === p.id ? ' active' : ''}`}>
+            <Link to={`/projects/${p.id}`} className="nav-proj-link" title={run ? `${p.name}: ${run.title}` : p.name}>
+              <span className="ws-wrap">
+                <ProjectGlyph name={p.name} ws={p.workspace} color={p.color} size={18} />
+                {st && run && <span className={`presence ${st}`} aria-label={run.title} />}
+              </span>
+              <span className="truncate">{p.name}</span>
+            </Link>
+            <button type="button" className="nav-proj-new" onClick={() => openNewSession({ projectId: p.id })} aria-label={`New session in ${p.name}`} title="New session here">
+              <Play size={13} />
+            </button>
+          </div>
+        );
+      })}
+      <Link to="/projects" className="nav-item more">
+        <span className="ws-more-ico">
+          <ArrowRight size={14} />
+        </span>
+        <span>All projects</span>
+      </Link>
+    </div>
+  );
+}
+
 function Sidebar() {
   const { data: overview } = useOverview();
   const { data: projects } = useProjects();
   const loc = useLocation();
-  const [allWs, setAllWs] = useState(false);
   const work = overview?.work;
   const tasksOpen = work ? (work.todoCount || 0) + (work.doingCount || 0) : 0;
   const possible = overview?.scout?.newCount || 0;
-  // running sessions per workspace; the dot shows the most urgent state: needs-you > working > open
-  const wsRun = new Map<string, RunCounts>();
-  for (const s of overview?.live || []) {
-    if (!s.workspace) continue;
-    const st = liveState(s);
-    const c = wsRun.get(s.workspace) || { needs: 0, working: 0, open: 0 };
-    if (st === 'needs-you') c.needs++;
-    else if (st === 'working') c.working++;
-    else c.open++;
-    wsRun.set(s.workspace, c);
-  }
-  const workspaces = new Map<string, { name: string; n: number; live: number; active: number; only: string | null }>();
-  for (const p of projects || []) {
-    const w = workspaces.get(p.workspace) || { name: p.workspaceName, n: 0, live: 0, active: 0, only: null };
-    w.n++;
-    w.live += p.liveCount;
-    w.only = w.n === 1 ? p.id : null;
-    if (p.status === 'active') w.active++;
-    workspaces.set(p.workspace, w);
-  }
-  const ws = [...workspaces.entries()].sort((a, b) => b[1].live - a[1].live || b[1].active - a[1].active || b[1].n - a[1].n);
-  const curWs = loc.pathname === '/projects' ? new URLSearchParams(loc.search).get('ws') : null;
   const curProject = loc.pathname.startsWith('/projects/') ? decodeURIComponent(loc.pathname.slice('/projects/'.length)) : null;
-  const shown = allWs ? ws : ws.slice(0, WS_VISIBLE);
+  const recent = recentProjects(projects);
+  // a project page lights its Recent projects row; Projects stays lit for the others
+  const inRecent = !!curProject && recent.some((p) => p.id === curProject);
   const nav = (to: string, icon: React.ReactNode, label: string, badge?: React.ReactNode, opts: { end?: boolean; title?: string } = {}) => (
-    <NavLink to={to} end={opts.end} title={opts.title} className={({ isActive }) => `nav-item${isActive && !(to === '/projects' && curWs) ? ' active' : ''}`}>
+    <NavLink to={to} end={opts.end} title={opts.title} className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}>
       {icon}
       <span>{label}</span>
       {badge}
     </NavLink>
   );
-  const sub = (to: string, icon: React.ReactNode, label: string) => (
+  const sub = (to: string, icon: React.ReactNode, label: string, badge?: React.ReactNode) => (
     <NavLink to={to} className={({ isActive }) => `nav-item sub${isActive ? ' active' : ''}`}>
       {icon}
       <span>{label}</span>
+      {badge}
     </NavLink>
   );
   const count = (n: number, title: string) => (n > 0 ? <span className="count num" title={title}>{n}</span> : undefined);
@@ -127,45 +163,13 @@ function Sidebar() {
         {nav('/sessions', <MessagesSquare size={16} />, 'Sessions', <SessionsBadge live={overview?.live} />, {
           title: c?.interactive !== undefined ? `${plural(c.interactive, 'session')} with you${c.automated ? ` · ${plural(c.automated, 'automation')}` : ''}` : undefined,
         })}
+        {nav('/projects', <FolderKanban size={16} />, 'Projects', undefined, { end: inRecent })}
         {nav('/tasks', <ListChecks size={16} />, 'Tasks', count(tasksOpen, `${work?.todoCount || 0} to do · ${work?.doingCount || 0} doing`))}
-        {nav('/projects', <FolderKanban size={16} />, 'Projects')}
-        {nav('/ideas', <Lightbulb size={16} />, 'Ideas', count(possible, `${plural(possible, 'new possible project')}`))}
       </nav>
-      {ws.length > 0 && (
-        <div className="nav-section">
-          <span>Workspaces</span>
-        </div>
-      )}
-      {shown.map(([key, w]) => {
-        const run = runningWord(wsRun.get(key));
-        const st = run ? (run.state === 'idle_live' ? 'open' : run.state) : null;
-        const to = w.only ? `/projects/${w.only}` : `/projects?ws=${encodeURIComponent(key)}`;
-        const active = w.only ? curProject === w.only : curWs === key;
-        return (
-          <NavLink key={key} to={to} className={() => `nav-item ws${active ? ' active' : ''}`} title={run ? `${w.name}: ${run.title}` : w.only ? `${w.name} (one project)` : w.name}>
-            <span className="ws-wrap">
-              <WorkspaceAvatar ws={key} name={w.name} size={18} />
-              {st && run && <span className={`presence ${st}`} aria-label={run.title} />}
-            </span>
-            <span className="truncate">{w.name}</span>
-            {!w.only && (
-              <span className="count num" title={plural(w.n, 'project')}>
-                {w.n}
-              </span>
-            )}
-          </NavLink>
-        );
-      })}
-      {ws.length > WS_VISIBLE && (
-        <button type="button" className="nav-item more" onClick={() => setAllWs(!allWs)}>
-          <span className="ws-more-ico">
-            <MoreHorizontal size={14} />
-          </span>
-          <span>{allWs ? 'Show fewer' : `${ws.length - WS_VISIBLE} more`}</span>
-        </button>
-      )}
+      <RecentProjects recent={recent} curProject={curProject} />
       <div className="sidebar-foot">
         <nav className="nav-secondary" aria-label="More">
+          {sub('/ideas', <Lightbulb size={15} />, 'Ideas', count(possible, plural(possible, 'new possible project')))}
           {sub('/history', <History size={15} />, 'History')}
           {sub('/portfolio', <Briefcase size={15} />, 'Portfolio & CV')}
           {sub('/settings', <Settings size={15} />, 'Settings')}
@@ -212,9 +216,8 @@ function BottomNav() {
   const loc = useLocation();
   const [createOpen, setCreateOpen] = useState(false);
   const plusRef = useRef<HTMLButtonElement>(null);
-  const moreActive = ['/projects', '/ideas', '/history', '/timeline', '/portfolio', '/settings', '/guide', '/more'].some((p) => loc.pathname.startsWith(p));
-  const work = overview?.work;
-  const tasksOpen = work ? (work.todoCount || 0) + (work.doingCount || 0) : 0;
+  const moreActive = ['/tasks', '/ideas', '/history', '/timeline', '/portfolio', '/settings', '/guide', '/more'].some((p) => loc.pathname.startsWith(p));
+  const todayTasks = useTodayTaskCount();
   const item = (to: string, icon: React.ReactNode, label: string, extra?: React.ReactNode, end = false) => (
     <NavLink to={to} end={end} className={({ isActive }) => (isActive ? 'active' : '')}>
       <span className="ico">{icon}</span>
@@ -232,12 +235,17 @@ function BottomNav() {
         </span>
         New
       </button>
-      {item('/tasks', <ListChecks />, 'Tasks', tasksOpen > 0 ? <span className="pip count-pip" aria-label={`${tasksOpen} to do or doing`}>{tasksOpen}</span> : undefined)}
+      {item('/projects', <FolderKanban />, 'Projects')}
       <NavLink to="/more" className={() => (moreActive ? 'active' : '')}>
         <span className="ico">
           <MoreHorizontal />
         </span>
         More
+        {todayTasks > 0 && (
+          <span className="pip count-pip" aria-label={`${plural(todayTasks, 'task')} for today or in progress`}>
+            {todayTasks}
+          </span>
+        )}
       </NavLink>
       {createOpen && <CreateSheet anchor={plusRef.current} onClose={() => setCreateOpen(false)} />}
     </nav>
@@ -284,7 +292,7 @@ class PageBoundary extends React.Component<{ resetKey: string; children: React.R
 }
 
 // Browser toolbar / status bar color. index.html keys it on the OS scheme; a forced theme overrides both metas.
-const CHROME_COLOR = { dark: '#0e1014', light: '#f6f7f9' } as const;
+const CHROME_COLOR = { dark: '#0b0c0f', light: '#f8f8fa' } as const;
 function applyThemeColor(theme: string) {
   document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]').forEach((m) => {
     const media = m.getAttribute('media') || '';

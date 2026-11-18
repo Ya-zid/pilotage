@@ -294,7 +294,7 @@ test('Restore on an AI-closed card sticks: the next extraction neither closes it
   work.data.items = [];
 });
 
-test('brief rewrites: a step that only moved below the top 3 stays; "removed" never beats a still-open session loop', () => {
+test('brief rewrites: a step that only moved below the top 2 stays; "removed" never beats a still-open session loop', () => {
   const R = '/home/u/licensing';
   const A = 'Answer the open questions on licensing and key generation';
   const B = 'Decide the order of the Arabic and French releases';
@@ -316,7 +316,7 @@ test('brief rewrites: a step that only moved below the top 3 stays; "removed" ne
     assert.equal(st1.dropped + st2.dropped + st1.reopened + st2.reopened, 0, 'no flapping between inbox and dropped');
   }
   const ofR = data.items.filter((i) => i.projectPath === R);
-  assert.equal(ofR.length, 4);
+  assert.equal(ofR.length, 3, 'A, B and D were in the top 2 at some point; C never was');
   assert.ok(ofR.every((i) => i.status === 'inbox'), JSON.stringify(ofR.map((i) => [i.title, i.status, i.aiStatus])));
   // A step the brief really dropped still goes; listing it lower down later doesn't bring it back
   rewrite([A, B, C]);
@@ -324,7 +324,7 @@ test('brief rewrites: a step that only moved below the top 3 stays; "removed" ne
   assert.equal(dItem.status, 'dropped');
   assert.equal(dItem.aiStatus, 'removed');
   rewrite([A, B, C, D]);
-  assert.equal(dItem.status, 'dropped', 'only a top-3 listing (a real candidate) reopens it');
+  assert.equal(dItem.status, 'dropped', 'only a top-2 listing (a real candidate) reopens it');
   rewrite([D, A, B]);
   assert.equal(dItem.status, 'inbox');
   // Paygate = session loop S2:0 (blocked, still the latest of S2) + a brief step. The brief drops the step: still open.
@@ -480,7 +480,13 @@ test('spin-off folder: defaults to a sibling of the workspace folder, inside $HO
     rejects(() => planFolder({ name: 'x', parentDir: `${h.home}/../outside`, home: h.home }), 400, /\.\./);
     rejects(() => planFolder({ name: 'x', parentDir: '~/../outside', home: h.home }), 400, /\.\./);
     rejects(() => planFolder({ name: 'x', parentDir: 'work', home: h.home }), 400, /absolute/);
-    rejects(() => planFolder({ name: 'x', parentDir: '~/nope', home: h.home }), 400, /does not exist/);
+    // a folder that doesn't exist yet is created along with the project (first missing one reported)
+    const deep = planFolder({ name: 'x', parentDir: '~/nope/deeper', home: h.home });
+    assert.equal(deep.dir, path.join(h.home, 'nope', 'deeper', 'x'));
+    assert.equal(deep.newParent, path.join(h.home, 'nope'));
+    assert.equal(planFolder({ name: 'x', parentDir: '~/work', home: h.home }).newParent, null);
+    rejects(() => planFolder({ name: 'x', parentDir: '~/a/b/c/d/e/f/g', home: h.home }), 400, /too many/);
+    rejects(() => planFolder({ name: 'x', parentDir: '~/.ssh/new', home: h.home }), 400, /cannot be created/);
     rejects(() => planFolder({ name: 'x', parentDir: '~/.ssh', home: h.home }), 400, /cannot be created/);
     rejects(() => planFolder({ name: '...', home: h.home }), 400, /name/);
     // symlink tricks: a link inside home pointing outside, and a dangling link at the target name
@@ -517,6 +523,32 @@ test('spin-off folder: refuses existing folders, creates 0755 + CLAUDE.md, optio
     assert.equal(fs.readFileSync(made.claudeMd, 'utf8'), h1.markdown, 'never overwritten');
     assert.equal(enclosingRepo(path.join(made.dir), h.home), made.dir);
     assert.equal(enclosingRepo(path.join(h.home, 'work'), h.home), null);
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('new project folder: missing parent folders are created, and removed again if creation fails', async () => {
+  const h = fakeHome();
+  try {
+    const plan = planFolder({ name: 'Shop', parentDir: '~/clients/acme', home: h.home });
+    const made = await createProjectFolder(plan, '# Shop\n', { home: h.home });
+    assert.equal(made.dir, path.join(h.home, 'clients', 'acme', 'shop'));
+    assert.equal(fs.statSync(path.join(h.home, 'clients')).mode & 0o777, 0o755);
+    assert.equal(fs.readFileSync(made.claudeMd, 'utf8'), '# Shop\n');
+    // failure after the parents were made: CLAUDE.md can't be written (a folder sits in its place) -> all rolled back
+    const plan2 = planFolder({ name: 'Blog', parentDir: '~/fresh/sites', home: h.home });
+    const orig = fs.writeFileSync;
+    fs.writeFileSync = (f, ...a) => {
+      if (String(f).endsWith('CLAUDE.md')) throw new Error('disk full');
+      return orig(f, ...a);
+    };
+    try {
+      await assert.rejects(createProjectFolder(plan2, '# Blog\n', { home: h.home }), /disk full/);
+    } finally {
+      fs.writeFileSync = orig;
+    }
+    assert.equal(fs.existsSync(path.join(h.home, 'fresh')), false, 'new parents removed');
   } finally {
     h.cleanup();
   }

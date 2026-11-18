@@ -1,79 +1,22 @@
-// Tasks › Suggested: the triage list (SIMPLIFY §6). AI suggestions are kept apart from commitments until the user decides:
-// Keep (→ To do) · Today (→ To do + today) · Not now (snooze 7 d) · Dismiss with a reason (Not a task · Already done · Duplicate).
-// Every row shows where it came from (project + session/summary + the outcome that raised it), never a score.
+// Tasks › Suggested: the triage list (SIMPLIFY §6). AI suggestions stay apart from commitments until the user decides.
+// A row is the short title + one meta line (age, who); the full step and where it came from are in the task sheet
+// (tap the row). One visible action, Keep (on hover on PC), and a ⋯ menu: Today · Not now · Not a task · Already
+// done · Duplicate. Grouped by project (3 shown, "+N more") on /tasks; a flat list inside a project.
 // Keys (desktop): J/K move · 1 Keep · 2 Today · 3 Dismiss (then 1–3 picks the reason) · H Not now · Enter opens.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Check, Clock, CornerDownRight, Inbox, Sun, Undo2, X } from 'lucide-react';
-import { Button, Card, Disclosure, EmptyState, Kbd, Meta, ProjectGlyph, Snippet } from '../ui';
+import { Check, Clock, Copy, Inbox, MoreHorizontal, Plus, Sun, Undo2, X } from 'lucide-react';
+import { Button, Card, Disclosure, EmptyState, Kbd, Meta, ProjectGlyph } from '../ui';
 import type { WorkItem } from '../../types-extra';
 import { ago, fmtDate, fmtDateTime, plural } from '../../util';
-import { AiTag, useProjectIndex } from './TaskBits';
+import { Menu, type MenuItem, useProjectIndex, WhoTag } from './TaskBits';
 import { DISMISS_REASONS, SNOOZE_DAYS, suggestedAt, useMedia, useTaskActions } from './model';
 import './tasks.css';
 
-const PAGE = 10;
-/** Dismiss reasons offered as chips; "Not now" (snooze) has its own button on the row (key H). */
+const PAGE = 10; // flat list (project page)
+const PER_GROUP = 3; // grouped list (/tasks)
+/** Dismiss reasons offered as chips after the "3" key; "Not now" (snooze) is H. */
 const CHIP_REASONS = DISMISS_REASONS.filter((r) => r.value !== 'snooze');
-const norm = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
-
-/** The "why" of a suggestion, from its detail: the outcome of the session block that raised it, or the part of a
- *  summary step that says more than the title. '' when it would only repeat the title. */
-export function suggestionReason(it: Pick<WorkItem, 'title' | 'detail'>): string {
-  const paras = (it.detail || '')
-    .split(/\n\s*\n/)
-    .map((p) => p.trim())
-    .filter(Boolean);
-  for (const p of paras) {
-    const m = /^From: “[^”]*”\s*[—–-]\s*([\s\S]+)$/.exec(p);
-    if (m) return m[1].trim();
-  }
-  let text = paras.filter((p) => !/^From the project (brief|summary)\.?$/i.test(p)).join(' ');
-  const t = norm(it.title);
-  if (norm(text).startsWith(t)) {
-    // "Do X, then confirm Y." with title "Do X" → "Then confirm Y."
-    const words = it.title.trim().split(/\s+/).length;
-    text = text
-      .split(/\s+/)
-      .slice(words)
-      .join(' ')
-      .replace(/^[\s,.;:–—-]+/, '');
-    text = text ? text.charAt(0).toUpperCase() + text.slice(1) : '';
-  }
-  // A summary step often restates the title with a detail or two ("… ($120/month)"): not a reason.
-  const known = new Set(t.split(' '));
-  const novel = norm(text)
-    .split(' ')
-    .filter((w) => w.length > 2 && !known.has(w)).length;
-  return text.length >= 20 && novel >= 4 ? text : '';
-}
-
-/** Where it came from, as a link to the session (or the project summary). */
-export function SuggestionSource({ it }: { it: WorkItem }) {
-  const s = it.source;
-  if (s.kind === 'ai' && s.sessionId)
-    return s.sessionTitle ? (
-      <Link to={`/sessions/${s.sessionId}`} className="sg-src" title="Open the session it came from">
-        <CornerDownRight aria-hidden="true" />
-        <span className="truncate">From “{s.sessionTitle}”</span>
-      </Link>
-    ) : (
-      <span className="sg-src">
-        <CornerDownRight aria-hidden="true" />
-        <span className="truncate">From a session that no longer exists</span>
-      </span>
-    );
-  if (s.kind === 'brief')
-    return (
-      <Link to={`/projects/${it.projectId}`} className="sg-src" title="Open the project">
-        <CornerDownRight aria-hidden="true" />
-        <span className="truncate">From the {it.projectName} summary</span>
-      </Link>
-    );
-  if (s.kind === 'idea') return <span className="sg-src">From one of your ideas</span>;
-  if (s.kind === 'spinoff') return <span className="sg-src">From a spin-off kickoff</span>;
-  return <span className="sg-src">Added by you</span>;
-}
 
 function SuggestionRow({
   it,
@@ -100,16 +43,23 @@ function SuggestionRow({
   const phone = useMedia();
   const pindex = useProjectIndex();
   const project = pindex.get(it.projectId);
-  const reason = suggestionReason(it);
-  const reasons = CHIP_REASONS;
+  const [menu, setMenu] = useState(false);
+  const moreRef = useRef<HTMLButtonElement>(null);
+  const items: MenuItem[] = [
+    { key: 'today', label: 'Add to today', icon: <Sun />, sub: 'Also keeps it in To do', hint: phone ? undefined : '2', onSelect: () => setToday(it.id, true) },
+    snoozed
+      ? { key: 'back', label: 'Bring back now', icon: <Undo2 />, onSelect: () => dismiss(it.id, 'unsnooze') }
+      : { key: 'snooze', label: 'Not now', icon: <Clock />, sub: `Hidden for ${SNOOZE_DAYS} days`, hint: phone ? undefined : 'H', onSelect: () => dismiss(it.id, 'snooze') },
+    { key: 'not-a-task', sep: true, label: 'Not a task', icon: <X />, onSelect: () => dismiss(it.id, 'not-a-task') },
+    { key: 'done', label: 'Already done', icon: <Check />, onSelect: () => dismiss(it.id, 'done') },
+    { key: 'duplicate', label: 'Duplicate', icon: <Copy />, onSelect: () => dismiss(it.id, 'duplicate') },
+  ];
   return (
-    <div ref={rowRef} className={`sg-row${focused ? ' focused' : ''}${chips ? ' chips-open' : ''}`} tabIndex={-1} onFocus={onFocusRow} role="listitem" aria-label={it.title}>
-      <div className="sg-body">
-        <button type="button" className="sg-title" onClick={onOpen} title="Open the task">
-          {it.title}
-        </button>
+    <div ref={rowRef} className={`lrow sg-row clickable${focused ? ' focused' : ''}${chips ? ' chips-open' : ''}${menu ? ' menu-open' : ''}`} tabIndex={-1} onFocus={onFocusRow} role="listitem" aria-label={it.title}>
+      <button type="button" className="lrow-link" aria-label={`Open: ${it.title}`} onClick={onOpen} tabIndex={-1} />
+      <div className="lrow-body">
+        <span className="sg-title">{it.title}</span>
         <Meta
-          className="sg-meta"
           items={[
             showProject ? (
               <span className="task-proj">
@@ -117,7 +67,7 @@ function SuggestionRow({
                 <span className="truncate">{it.projectName}</span>
               </span>
             ) : null,
-            it.ai ? <AiTag /> : null,
+            it.who ? <WhoTag who={it.who} /> : null,
             snoozed && it.snoozeUntil ? (
               <span title={fmtDateTime(it.snoozeUntil)}>Back {fmtDate(it.snoozeUntil)}</span>
             ) : (
@@ -125,35 +75,20 @@ function SuggestionRow({
             ),
           ]}
         />
-        {reason && <Snippet text={reason} lines={2} className="sg-reason" />}
-        <div className="sg-src-line">
-          <SuggestionSource it={it} />
-        </div>
       </div>
-      <div className="sg-actions" role="group" aria-label="Decide">
-        <Button size="sm" icon={<Check />} onClick={() => setStatus(it.id, 'todo')} title={phone ? undefined : 'Keep it in To do (1)'}>
+      <div className="sg-actions above" role="group" aria-label="Decide" onClick={(e) => e.stopPropagation()}>
+        <Button size="sm" variant="ghost" icon={<Plus />} className="sg-keep" onClick={() => setStatus(it.id, 'todo')} title={phone ? undefined : 'Keep it in To do (1)'}>
           Keep
         </Button>
-        <Button size="sm" icon={<Sun />} onClick={() => setToday(it.id, true)} title={phone ? undefined : 'Keep it and add it to today (2)'}>
-          Today
-        </Button>
-        {snoozed ? (
-          <Button size="sm" variant="ghost" icon={<Undo2 />} onClick={() => dismiss(it.id, 'unsnooze')} title="Show it in Suggested again now">
-            Bring back
-          </Button>
-        ) : (
-          <Button size="sm" variant="ghost" icon={<Clock />} onClick={() => dismiss(it.id, 'snooze')} title={`Hide it for ${SNOOZE_DAYS} days${phone ? '' : ' (H)'}`}>
-            Not now
-          </Button>
-        )}
-        <Button size="sm" variant={chips ? 'subtle' : 'ghost'} icon={<X />} onClick={() => onChips(!chips)} aria-expanded={chips} title={phone ? undefined : 'Dismiss (3)'}>
-          Dismiss
-        </Button>
+        <button ref={moreRef} type="button" className="btn sm ghost icon sg-more" aria-label="More: today, not now, dismiss" aria-haspopup="menu" aria-expanded={menu} title="Today, Not now, Dismiss…" onClick={() => setMenu(true)}>
+          <MoreHorizontal />
+        </button>
+        {menu && <Menu anchor={moreRef.current} title={it.title} items={items} onClose={() => setMenu(false)} />}
       </div>
       {chips && (
-        <div className="sg-chips" role="group" aria-label="Why dismiss it?">
+        <div className="sg-chips above" role="group" aria-label="Why dismiss it?">
           <span className="sg-chips-label">Why?</span>
-          {reasons.map((r, i) => (
+          {CHIP_REASONS.map((r, i) => (
             <button
               key={r.value}
               type="button"
@@ -182,7 +117,10 @@ function isTyping(t: EventTarget | null) {
   return !!el && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName));
 }
 
-/** The triage list. `items` = suggestions to show (already filtered); `snoozed` = hidden ones, in a fold below. */
+type Group = { id: string; name: string; workspace: string | null; items: WorkItem[]; at: number };
+
+/** The triage list. `items` = suggestions to show (already filtered); `snoozed` = hidden ones, in a fold below.
+ *  showProject = the cross-project page: grouped by project. */
 export function SuggestedList({
   items,
   snoozed,
@@ -191,6 +129,7 @@ export function SuggestedList({
   onOpen,
   emptyAction,
   filtered = false,
+  footer,
 }: {
   items: WorkItem[];
   snoozed: WorkItem[];
@@ -201,22 +140,39 @@ export function SuggestedList({
   emptyAction?: React.ReactNode;
   /** a search/filter is narrowing the list (changes the empty state) */
   filtered?: boolean;
+  /** quiet extras under the list (e.g. "Dismiss the old ones") */
+  footer?: React.ReactNode;
 }) {
   const phone = useMedia();
+  const pindex = useProjectIndex();
   const { setStatus, setToday, dismiss } = useTaskActions();
   const sorted = useMemo(() => [...items].sort((a, b) => suggestedAt(b) - suggestedAt(a)), [items]);
   const snoozedSorted = useMemo(() => [...snoozed].sort((a, b) => (a.snoozeUntil || 0) - (b.snoozeUntil || 0)), [snoozed]);
   const [limit, setLimit] = useState(PAGE);
-  const shown = sorted.slice(0, limit);
+  const [open, setOpen] = useState<Record<string, boolean>>({});
+  const grouped = showProject;
+  const groups: Group[] = useMemo(() => {
+    if (!grouped) return [];
+    const m = new Map<string, Group>();
+    for (const it of sorted) {
+      const g = m.get(it.projectId) || { id: it.projectId, name: it.projectName, workspace: it.workspace, items: [], at: 0 };
+      g.items.push(it);
+      g.at = Math.max(g.at, suggestedAt(it));
+      m.set(it.projectId, g);
+    }
+    return [...m.values()].sort((a, b) => b.at - a.at);
+  }, [sorted, grouped]);
+  // Rows on screen, in display order (the keyboard walks this list).
+  const shown = useMemo(() => (grouped ? groups.flatMap((g) => (open[g.id] ? g.items : g.items.slice(0, PER_GROUP))) : sorted.slice(0, limit)), [grouped, groups, open, sorted, limit]);
   const [focusIdx, setFocusIdx] = useState(0);
   const [kb, setKb] = useState(false);
   const [chipsFor, setChipsFor] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
-  const refs = useRef<(HTMLDivElement | null)[]>([]);
+  const refs = useRef<Map<string, HTMLDivElement | null>>(new Map());
   const idx = Math.max(0, Math.min(focusIdx, shown.length - 1));
 
   const focusRow = (i: number) => {
-    const el = refs.current[i];
+    const el = shown[i] ? refs.current.get(shown[i].id) : null;
     if (!el) return;
     el.focus({ preventScroll: true });
     el.scrollIntoView({ block: 'nearest' });
@@ -258,7 +214,7 @@ export function SuggestedList({
       }
       const arrow = k === 'arrowdown' || k === 'arrowup';
       if (arrow && !inList) return; // don't hijack page scrolling
-      if (k === 'enter' && document.activeElement !== refs.current[idx]) return; // Enter on a button presses the button
+      if (k === 'enter' && document.activeElement !== refs.current.get(cur?.id)) return; // Enter on a button presses the button
       if (!['j', 'k', 'arrowdown', 'arrowup', '1', '2', '3', 'h', 'enter'].includes(k)) return;
       e.preventDefault();
       if (!kb) {
@@ -286,15 +242,38 @@ export function SuggestedList({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [active, phone, dismiss, setStatus, setToday, onOpen]);
+  }, [active, phone, dismiss, setStatus, setToday, onOpen]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const row = (it: WorkItem, opts: { showProject: boolean; snoozed?: boolean }) => {
+    const i = shown.indexOf(it);
+    return (
+      <SuggestionRow
+        key={it.id}
+        it={it}
+        showProject={opts.showProject}
+        snoozed={opts.snoozed}
+        focused={!phone && kb && i === idx && i >= 0}
+        chips={chipsFor === it.id}
+        onChips={(o) => setChipsFor(o ? it.id : null)}
+        onFocusRow={
+          i >= 0
+            ? () => {
+                setFocusIdx(i);
+                setKb(true);
+              }
+            : undefined
+        }
+        onOpen={() => onOpen(it.id)}
+        rowRef={i >= 0 ? (el) => refs.current.set(it.id, el) : undefined}
+      />
+    );
+  };
 
   const snoozedFold =
     snoozedSorted.length > 0 ? (
-      <Disclosure summary={<>{plural(snoozedSorted.length, 'snoozed suggestion')} <span className="faint">hidden with Not now</span></>} className="task-fold">
+      <Disclosure summary={<>Snoozed <span className="num faint">{snoozedSorted.length}</span></>} className="task-fold">
         <Card flush className="sg-list">
-          {snoozedSorted.map((it) => (
-            <SuggestionRow key={it.id} it={it} showProject={showProject} focused={false} snoozed chips={chipsFor === it.id} onChips={(o) => setChipsFor(o ? it.id : null)} onOpen={() => onOpen(it.id)} />
-          ))}
+          {snoozedSorted.map((it) => row(it, { showProject, snoozed: true }))}
         </Card>
       </Disclosure>
     ) : null;
@@ -306,49 +285,64 @@ export function SuggestedList({
           {filtered ? (
             <EmptyState compact icon={<Inbox />} title="No suggestions match" body="Try another search or project." action={emptyAction} />
           ) : (
-            <EmptyState icon={<Inbox />} title="No suggestions" body="Pilotage reads your sessions and suggests tasks here." action={emptyAction} />
+            <EmptyState icon={<Inbox />} title="Nothing suggested" body="Pilotage suggests tasks from your sessions. They show up here." action={emptyAction} />
           )}
         </Card>
         {snoozedFold}
+        {footer}
       </>
     );
 
   return (
     <>
-      {!phone && (
-        <div className="sg-keys faint tiny" aria-hidden="true">
-          <Kbd>J</Kbd>
-          <Kbd>K</Kbd> move · <Kbd>1</Kbd> Keep · <Kbd>2</Kbd> Today · <Kbd>3</Kbd> Dismiss · <Kbd>H</Kbd> Not now
+      {grouped ? (
+        <div ref={listRef} className="sg-groups" role="list" aria-label="Suggested tasks">
+          {groups.map((g) => {
+            const p = pindex.get(g.id);
+            const more = g.items.length - PER_GROUP;
+            return (
+              <section key={g.id} className="sg-group" aria-label={g.name}>
+                <div className="sg-group-head">
+                  <ProjectGlyph name={g.name} ws={g.workspace ?? p?.workspace} color={p?.color} size={22} />
+                  {p ? (
+                    <Link to={`/projects/${g.id}`} className="sg-group-name truncate">
+                      {g.name}
+                    </Link>
+                  ) : (
+                    <span className="sg-group-name truncate">{g.name}</span>
+                  )}
+                  {g.items.length > 1 && <span className="count-pill num">{g.items.length}</span>}
+                </div>
+                <Card flush className="sg-list">
+                  {(open[g.id] ? g.items : g.items.slice(0, PER_GROUP)).map((it) => row(it, { showProject: false }))}
+                  {more > 0 && (
+                    <div className="task-more-row">
+                      <button type="button" className="task-more" onClick={() => setOpen((x) => ({ ...x, [g.id]: !x[g.id] }))}>
+                        {open[g.id] ? 'Show fewer' : `+${more} more`}
+                      </button>
+                    </div>
+                  )}
+                </Card>
+              </section>
+            );
+          })}
         </div>
-      )}
-      <Card flush className="sg-list">
-        <div ref={listRef} role="list" aria-label="Suggested tasks">
-          {shown.map((it, i) => (
-            <SuggestionRow
-              key={it.id}
-              it={it}
-              showProject={showProject}
-              focused={!phone && kb && i === idx}
-              chips={chipsFor === it.id}
-              onChips={(o) => setChipsFor(o ? it.id : null)}
-              onFocusRow={() => {
-                setFocusIdx(i);
-                setKb(true);
-              }}
-              onOpen={() => onOpen(it.id)}
-              rowRef={(el) => (refs.current[i] = el)}
-            />
-          ))}
-        </div>
-        {sorted.length > limit && (
-          <div className="task-more-row">
-            <button type="button" className="task-more" onClick={() => setLimit(sorted.length)}>
-              Show {sorted.length - limit} more
-            </button>
+      ) : (
+        <Card flush className="sg-list">
+          <div ref={listRef} role="list" aria-label="Suggested tasks">
+            {shown.map((it) => row(it, { showProject: false }))}
           </div>
-        )}
-      </Card>
+          {sorted.length > limit && (
+            <div className="task-more-row">
+              <button type="button" className="task-more" onClick={() => setLimit(sorted.length)}>
+                Show {plural(sorted.length - limit, 'more suggestion')}
+              </button>
+            </div>
+          )}
+        </Card>
+      )}
       {snoozedFold}
+      {footer}
     </>
   );
 }

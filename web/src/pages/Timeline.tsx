@@ -14,7 +14,7 @@ import { ProjectsMonthCard, WeeksCard } from '../components/timeline/Trends';
 import { useMedia } from '../components/session/shared';
 import './Timeline.css';
 
-const header = <PageHeader title="History" subtitle="What you worked on, day by day." />;
+const header = <PageHeader title="History" />;
 
 export default function Timeline() {
   const { data, isLoading, error, refetch } = useTimeline();

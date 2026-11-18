@@ -32,8 +32,12 @@ interface WorkItem {
   projectPath: string;
   projectName: string;
   workspace: string | null;
-  title: string;              // short imperative, ≤ 200 chars (AI titles ≤ ~96)
-  detail: string;             // plain text; AI items: full next step + "From: “<block title>” — <outcome>"
+  title: string;              // short imperative, ≤ 200 chars. AI titles: the AI's 3-7 word to-do (≤ 60 chars), or
+                              //   a shortened next step for summaries written before that field existed (≤ ~96)
+  detail: string;             // plain text; AI items: the Claude-facing next step (older items may still end with
+                              //   "\n\nFrom: “<block title>” — <outcome>" until their source is summarized again)
+  who: 'you' | 'claude' | 'waiting' | null; // who does it, as the AI sees it (null = unknown / not from the AI)
+  titleBy: 'short' | null;    // 'short': retitled by the one-time cleanup (server/work/retitle.js); never lengthened again
   status: WorkStatus;
   priority: 0 | 1 | 2 | 3;    // 0 low, 1 normal, 2 high, 3 urgent (AI never sets 3)
   source: {
@@ -49,7 +53,7 @@ interface WorkItem {
   autoManaged: boolean;       // the extractor may still move it (ai && !userEdited)
   userEdited: boolean;        // set by edits and by Restore (not by moves between open columns); then the AI never changes status/title/detail
   aiStatus: AiStatus;
-  closedBy: 'ai' | 'user' | null;
+  closedBy: 'ai' | 'user' | 'expired' | null; // 'ai' and 'expired' = closed automatically (restorable)
   createdAt: number;          // ms epoch, all timestamps
   updatedAt: number;
   sourceAt: number;           // when the evidence was observed (block end / brief time) — use for "3 days ago"
@@ -194,11 +198,19 @@ work: { openCount: number; doingCount: number; todoCount: number; inboxCount: nu
 ## How items appear and move (UX notes)
 
 - **Zero clicks:** items appear on their own from AI summaries. Per session, only the latest summarized block counts;
-  if it is in progress / blocked / ongoing with a next step, that is one item. Each project brief adds its top 3 next
-  steps (git-hygiene steps are skipped since Pilotage already shows them as signals). Near-duplicates in a project are
-  merged into one item.
-- New AI items land in **Inbox**; the one from a project's most recent block lands in **To do** (priority 2).
-  Nothing older than 45 days is created.
+  if it is in progress / blocked / ongoing with a next step, that is one item. Each project brief adds its top 2 next
+  steps (git-hygiene steps are skipped since Pilotage already shows them as signals). Near-duplicates in a project and
+  its parent/child folders (same title, or the same step text) are merged into one item.
+- Titles are the AI's short to-do (`digest.todo`, `brief.todos[i]`: 3-7 words, verb first, for the user); the detail is
+  the step written for Claude (used as the Start prompt). Steps the AI marks `waiting` (blocked on someone else) never
+  make a new item.
+- New AI items land in **Inbox** (Suggested). Only sessions active in the last 10 days make new items; at most 3
+  untouched suggestions per project stay open (a newer one expires the oldest, `closedBy: 'expired'`), and untouched
+  suggestions expire after 7 days. Snoozed, restored and edited ones don't count.
+- **One-time cleanup** (`server/work/retitle.js`, state in `work.json` `meta.cleanup`): suggestions from before these
+  rules whose source is older than 10 days are dropped (`closedBy: 'ai'`, restorable); the rest get a short title from
+  one batched AI call through the engine queue (usage guard, call caps, Settings › AI and `PILOTAGE_NO_AI` apply).
+  Rules, doubts and duplicates found by that call are dropped or merged (restorable). It runs once.
 - **AI vs user:** `ai: true` → show a small "AI" / sparkle badge and `source.sessionTitle` as a link to the session.
   `source.kind === 'brief'` → "from the project brief". `user`/`idea` items are the user's and are never touched.
 - **Auto-moves** (only `autoManaged` items): session reports done → Done (`closedBy: 'ai'`); a newer block in the

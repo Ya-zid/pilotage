@@ -2,13 +2,13 @@
 // - A task can be flagged for today (plannedFor = local day). Home › Today shows open tasks planned for today or
 //   earlier (unfinished ones roll over), plus the AI's focus items for today that the user hasn't accepted or declined yet.
 // - Suggested tasks (status 'inbox') can be kept, dismissed with a reason, or snoozed; untouched AI suggestions
-//   expire after 14 days (dropped, closedBy 'expired', recoverable).
+//   expire after 7 days (dropped, closedBy 'expired', recoverable).
 import { hash, clip, isoDay } from '../util.js';
 import { getWorkStore, OPEN_STATUSES, AI_KINDS } from '../work/store.js';
 import { similar } from '../work/extract.js';
 
 const DAY = 86400e3;
-export const EXPIRE_DAYS = 14;
+export const EXPIRE_DAYS = 7;
 const SNOOZE_DAYS = 7;
 const REASONS = new Set(['not-a-task', 'done', 'duplicate', 'snooze', 'unsnooze']);
 const KEY = '([a-f0-9]{12})';

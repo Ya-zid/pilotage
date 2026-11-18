@@ -382,3 +382,79 @@
   border-radius: var(--r-md);
   background: var(--surface-2);
 }
+
+/* calm redesign: entries fold to one title line + the Include switch */
+.cv-toggle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.cv-toggle .cv-titles,
+.cv-toggle .cv-title-row,
+.cv-toggle .cv-role {
+  display: flex;
+}
+.cv-toggle .cv-titles {
+  flex-direction: column;
+}
+.cv-toggle .cv-title {
+  display: block;
+}
+.cv-toggle:hover .cv-title {
+  color: var(--accent-text);
+}
+.cv-chev {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  color: var(--text-3);
+  transition: transform var(--dur-2) var(--ease);
+}
+.cv-toggle[aria-expanded='true'] .cv-chev {
+  transform: rotate(90deg);
+}
+.cv-head {
+  align-items: center;
+}
+.cv-include.cv-include-head {
+  flex: none;
+  padding: 0;
+}
+.cv-entry:has(.cv-toggle[aria-expanded='false']) .cv-main {
+  padding-top: 16px;
+  padding-bottom: 16px;
+}
+.cv-period-m {
+  display: none;
+}
+@media (max-width: 860px) {
+  .cv-toggle .cv-title-row .cv-period {
+    display: none;
+  }
+  .cv-period-m {
+    display: inline;
+  }
+  .cv-toggle .cv-title {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+  }
+  .cv-toggle .cv-role {
+    min-width: 0;
+    font-size: var(--fs-xs);
+    color: var(--text-3);
+  }
+  .cv-head .cv-glyph {
+    align-self: flex-start;
+  }
+}

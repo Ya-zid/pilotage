@@ -75,8 +75,8 @@ export function dateInputToMs(v: string): number | undefined {
 // ---------------------------------------------------------------- Today flag + Suggested (SIMPLIFY §6, §10)
 
 const DAY_MS = 86400e3;
-/** Suggestions untouched for this long are dropped by the server (and by "Dismiss all older than 14 days"). */
-export const OLD_DAYS = 14;
+/** Suggestions untouched for this long are dropped by the server (EXPIRE_DAYS in server/routes/plan.js). */
+export const OLD_DAYS = 7;
 export const SNOOZE_DAYS = 7;
 
 /** Local YYYY-MM-DD, the same day string the server uses for plannedFor. */
@@ -103,6 +103,19 @@ export function isOldSuggestion(it: WorkItem, now = Date.now(), days = OLD_DAYS)
   const made = Math.max(it.createdAt || it.sourceAt || now, it.restoredAt || 0, it.snoozeUntil || 0);
   return now - made > days * DAY_MS;
 }
+/** Closed by Pilotage itself (the session said done, the summary moved on, expired, tidied up): hidden behind
+ *  "Show N closed automatically" in Tasks, restorable from the task sheet. */
+export function isAutoClosed(it: Pick<WorkItem, 'status' | 'closedBy'>) {
+  return (it.status === 'done' || it.status === 'dropped') && (it.closedBy === 'ai' || it.closedBy === 'expired');
+}
+
+/** Who does it, as the AI sees it: a small marker on task rows. */
+export const WHO_LABEL: Record<'you' | 'claude' | 'waiting', { label: string; hint: string }> = {
+  you: { label: 'You', hint: 'Something you do yourself' },
+  claude: { label: 'Claude', hint: 'A Claude session can do this' },
+  waiting: { label: 'Waiting', hint: 'Waiting on someone else' },
+};
+
 /** When the suggestion was seen (the evidence time, else when it was created). */
 export const suggestedAt = (it: Pick<WorkItem, 'sourceAt' | 'createdAt'>) => it.sourceAt || it.createdAt;
 

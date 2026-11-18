@@ -51,6 +51,8 @@ export const DEFAULT_SETTINGS = {
     model: '',
     pcMode: 'terminal',
     phoneMode: 'background',
+    /** Answer Claude Code's "trust this folder?" for folders started from Pilotage (writes ~/.claude.json; see claude-trust.js). */
+    trustFolders: false,
   },
   scan: {
     extraRoots: [],

@@ -1,7 +1,8 @@
-// One project as a CV entry: glyph, title, period, role, tagline, bullets, stack, and a quiet provenance line.
+// One project as a CV entry, folded by default (glyph, title, period, role, Include switch); tap to see the tagline,
+// bullets, stack, a quiet provenance line and the actions.
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { CircleDashed, ExternalLink, FileText, Github, Pencil, RotateCcw, Sparkles } from 'lucide-react';
+import { ChevronRight, CircleDashed, ExternalLink, FileText, Github, Pencil, RotateCcw, Sparkles } from 'lucide-react';
 import type { PortfolioProject } from '../../types';
 import { Button, IconButton, Meta, ProjectGlyph, Spinner, Switch } from '../ui';
 import { fmtDate, fmtDateTime, plural } from '../../util';
@@ -84,7 +85,10 @@ export function EntryCard({
   onWrite: () => void;
 }) {
   const [more, setMore] = useState(false);
+  const [open, setOpen] = useState(false);
   const writing = runningSince !== undefined;
+  // Folded by default: the title line and the Include switch. Tap the title to see the bullets and the actions.
+  const show = open || writing;
   const ready = e.source === 'edited' || e.source === 'ai';
   const isGithub = /github\.com/i.test(e.link);
   const bullets = more ? e.bullets : e.bullets.slice(0, MAX_BULLETS);
@@ -95,20 +99,30 @@ export function EntryCard({
       <div className="cv-main">
         <header className="cv-head">
           <Link to={`/projects/${p.id}`} className="cv-glyph" title={`${p.name} · ${p.workspaceName}`}>
-            <ProjectGlyph name={p.name} ws={p.workspace} color={p.color} size={36} />
+            <ProjectGlyph name={p.name} ws={p.workspace} color={p.color} size={32} />
           </Link>
-          <div className="cv-titles">
-            <div className="cv-title-row">
-              <h3 className="cv-title">{e.title}</h3>
-              {e.period && <span className="cv-period num">{e.period}</span>}
-            </div>
-            <div className="cv-role">{[e.role, p.workspaceName].filter(Boolean).join(' · ')}</div>
-          </div>
+          <button type="button" className="cv-toggle" aria-expanded={show} onClick={() => setOpen(!open)}>
+            <span className="cv-titles">
+              <span className="cv-title-row">
+                <span className="cv-title">{e.title}</span>
+                {e.period && <span className="cv-period num">{e.period}</span>}
+              </span>
+              <span className="cv-role">
+                <span className="truncate">{[e.period ? <span key="p" className="cv-period-m">{e.period} · </span> : null, [e.role, p.workspaceName].filter(Boolean).join(' · ')]}</span>
+              </span>
+            </span>
+            <ChevronRight className="cv-chev" aria-hidden="true" />
+          </button>
+          {!show && (
+            <label className="cv-include cv-include-head" title={included ? 'Included in the CV' : 'Not included in the CV'}>
+              <Switch on={included} onChange={onToggle} label={`Include ${e.title} in the CV`} />
+            </label>
+          )}
         </header>
 
-        {e.tagline && <p className="cv-tagline">{e.tagline}</p>}
+        {show && e.tagline && <p className="cv-tagline">{e.tagline}</p>}
 
-        {writing ? (
+        {!show ? null : writing ? (
           <div className="cv-writing" role="status">
             <Spinner size={15} />
             <span>
@@ -133,7 +147,7 @@ export function EntryCard({
           <p className="small faint">No highlights yet. Write the entry with AI, or add your own bullets.</p>
         )}
 
-        {e.stack.length > 0 && (
+        {show && e.stack.length > 0 && (
           <div className="cv-stack" aria-label="Stack">
             {e.stack.slice(0, 10).map((s) => (
               <span key={s} className="chip">
@@ -145,6 +159,7 @@ export function EntryCard({
         )}
       </div>
 
+      {show && (
       <footer className="cv-foot">
         <div className="cv-foot-info">
           <Provenance source={e.source} p={p} lang={lang} />
@@ -181,6 +196,7 @@ export function EntryCard({
           </Button>
         </div>
       </footer>
+      )}
     </article>
   );
 }

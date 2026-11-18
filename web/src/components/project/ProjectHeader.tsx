@@ -1,4 +1,4 @@
-// Project detail header: crumbs, identity, status, actions (new session, spin off, overflow).
+// Project detail header: crumbs, identity, status, one primary action (New session) and ⋯ (status, pin, edit, spin off…).
 // Open-in buttons (VS Code / Terminal / Folder) live in the Overview's Details card; running sessions in the strip below.
 import React from 'react';
 import { Copy, Eye, GitFork, MoreHorizontal, Pencil, Pin, PinOff, Plus } from 'lucide-react';
@@ -8,7 +8,7 @@ import type { ProjectDetail } from '../../types';
 import { Button, IconButton, PageHeader, ProjectGlyph, Snippet, useToast, WorkspaceAvatar, WorkStatus } from '../ui';
 import { copy } from '../../util';
 import { Menu, type MenuEntry } from './Menu';
-import { errMsg, useIsPhone } from './lib';
+import { errMsg } from './lib';
 
 const STATUS_CHOICES: { value: string | null; label: string; hint?: string }[] = [
   { value: null, label: 'Automatic', hint: 'From recent activity' },
@@ -22,7 +22,6 @@ export function ProjectHeader({ p, onEdit, onSpinoff, children }: { p: ProjectDe
   const { openNewSession } = useApp();
   const patch = usePatchProject(p.id);
   const toast = useToast();
-  const phone = useIsPhone();
   const set = (body: Record<string, unknown>, done: string) => patch.mutate(body, { onSuccess: () => toast(done), onError: (e) => toast(errMsg(e), true) });
 
   const items: MenuEntry[] = [
@@ -36,7 +35,7 @@ export function ProjectHeader({ p, onEdit, onSpinoff, children }: { p: ProjectDe
     { kind: 'sep' },
     { label: p.pinned ? 'Unpin' : 'Pin to the top', icon: p.pinned ? <PinOff /> : <Pin />, onSelect: () => set({ pinned: !p.pinned }, p.pinned ? 'Unpinned' : 'Pinned to the top') },
     { label: 'Edit project…', icon: <Pencil />, onSelect: onEdit },
-    ...(phone ? [{ label: 'Spin off…', icon: <GitFork />, onSelect: onSpinoff } as MenuEntry] : []),
+    { label: 'Spin off…', icon: <GitFork />, hint: 'Move some of this work into a new project', onSelect: onSpinoff },
     { label: 'Copy folder path', icon: <Copy />, hint: p.displayPath, onSelect: () => copy(p.path).then(() => toast('Path copied')) },
     ...(p.hidden ? [{ label: 'Show in lists again', icon: <Eye />, onSelect: () => set({ hidden: false }, 'Visible again') } as MenuEntry] : []),
   ];
@@ -71,17 +70,12 @@ export function ProjectHeader({ p, onEdit, onSpinoff, children }: { p: ProjectDe
           {p.hidden && <span className="pj-hidden-word">Hidden</span>}
         </>
       }
-      subtitle={p.oneLiner ? <Snippet text={p.oneLiner} lines={2} /> : undefined}
+      subtitle={p.oneLiner ? <Snippet text={p.oneLiner} lines={1} className="pj-oneliner" /> : undefined}
       actions={
         <>
-          <Button icon={<Plus />} onClick={() => openNewSession({ projectId: p.id })} className="pj-new-session">
-            New session here
+          <Button variant="primary" icon={<Plus />} onClick={() => openNewSession({ projectId: p.id })} className="pj-new-session">
+            New session
           </Button>
-          {!phone && (
-            <Button variant="ghost" icon={<GitFork />} onClick={onSpinoff}>
-              Spin off…
-            </Button>
-          )}
           <Menu label="Project actions" sheetTitle={p.name} items={items} trigger={(t) => <IconButton {...t} icon={<MoreHorizontal />} label="Project actions" variant="secondary" size="md" />} />
         </>
       }

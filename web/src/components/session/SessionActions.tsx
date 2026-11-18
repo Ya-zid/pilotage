@@ -1,13 +1,14 @@
 // What you can do with a session right now: continue it (live), resume / fork it (not live), or copy the
-// resume command (Codex / Gemini). Rendered in the page header on desktop and as a sticky bar on the phone.
+// resume command (Codex / Gemini). One primary button in the header (a floating pill on the phone); the rest in ⋯.
 import React from 'react';
-import { Copy, GitFork, Monitor, Play, Smartphone, Square, Terminal } from 'lucide-react';
+import { Copy, GitFork, Monitor, MoreHorizontal, Play, Smartphone, Square, Terminal } from 'lucide-react';
 import { api, useInvalidate, useWsl } from '../../api';
 import { useApp } from '../AppContext';
-import { useToast } from '../ui';
+import { IconButton, useToast } from '../ui';
+import { Menu, type MenuEntry } from '../project/Menu';
 import { copy } from '../../util';
 import type { SessionDetail } from '../../types';
-import { harnessOf } from './shared';
+import { harnessOf, useMedia } from './shared';
 
 export type SessionAction = {
   key: string;
@@ -85,7 +86,7 @@ export function useSessionActions(s: SessionDetail): ActionSet {
       primary: {
         key: 'topic',
         label: 'New session on this topic',
-        short: 'New session on this topic',
+        short: 'New session',
         icon: <Play />,
         title: 'The transcript is gone, so this starts a fresh session with a pointer to this one',
         onClick: () => openNewSession({ projectId: s.projectId || undefined, prompt: `Context: an earlier session about “${s.title}”. ` }),
@@ -97,7 +98,7 @@ export function useSessionActions(s: SessionDetail): ActionSet {
 
   if (harness === 'codex' && !wsl) {
     // No Windows Terminal to open it in: the resume command is the way back in.
-    return { primary: { ...copyResume, short: 'Copy resume command' }, secondary: [], note: 'Resume it with this command in a terminal' };
+    return { primary: { ...copyResume, short: 'Copy command' }, secondary: [], note: 'Resume it with this command in a terminal' };
   }
 
   if (harness === 'codex') {
@@ -123,17 +124,16 @@ export function useSessionActions(s: SessionDetail): ActionSet {
   }
 
   if (harness === 'gemini') {
-    return { primary: { ...copyResume, short: 'Copy resume command' }, secondary: [], note: 'Gemini resumes the latest chat in that folder' };
+    return { primary: { ...copyResume, short: 'Copy command' }, secondary: [], note: 'Gemini resumes the latest chat in that folder' };
   }
 
-  const next = s.digest?.nextStep && s.digest.status !== 'done' && s.digest.status !== 'abandoned' ? s.digest.nextStep : '';
   return {
     primary: {
       key: 'resume',
       label: 'Resume',
       icon: <Play />,
       title: 'Continue this conversation',
-      onClick: () => openNewSession({ resumeId: s.id, prompt: next ? `Let's continue. Next step: ${next}` : '' }),
+      onClick: () => openNewSession({ resumeId: s.id }),
     },
     secondary: [
       {
@@ -148,8 +148,8 @@ export function useSessionActions(s: SessionDetail): ActionSet {
   };
 }
 
-function ActionButton({ a, variant, size, block }: { a: SessionAction; variant: 'primary' | 'secondary' | 'ghost'; size: 'sm' | 'md'; block?: boolean }) {
-  const cls = ['btn', variant !== 'secondary' && variant, size === 'sm' && 'sm', a.danger && variant !== 'primary' && 'danger', a.desktopOnly && 'hide-mobile', block && 'grow'].filter(Boolean).join(' ');
+function ActionButton({ a, variant, size }: { a: SessionAction; variant: 'primary' | 'secondary' | 'ghost'; size: 'sm' | 'md' }) {
+  const cls = ['btn', variant !== 'secondary' && variant, size === 'sm' && 'sm', a.danger && variant !== 'primary' && 'danger'].filter(Boolean).join(' ');
   if (a.href)
     return (
       <a className={cls} href={a.href} target="_blank" rel="noreferrer" title={a.title}>
@@ -165,50 +165,45 @@ function ActionButton({ a, variant, size, block }: { a: SessionAction; variant: 
   );
 }
 
-/** Desktop: buttons in the header (and in the compact sticky header). All secondary: the shell's New session
- *  is the one primary button on desktop (DESIGN §2.6); only the phone bar below fills its first action. */
-export function HeaderActions({ set, size = 'md' }: { set: ActionSet; size?: 'sm' | 'md' }) {
+/** Everything that isn't the one primary action: the set's secondary actions, then page-level extras. */
+export function menuOf(set: ActionSet, extras: MenuEntry[], phone: boolean): MenuEntry[] {
+  const own: MenuEntry[] = set.secondary
+    .filter((a) => !(phone && a.desktopOnly))
+    .map((a) => ({ label: a.label, icon: a.icon, danger: a.danger, hint: a.key === 'copy' ? undefined : a.title, onSelect: a.href ? () => window.open(a.href, '_blank', 'noreferrer') : a.onClick || (() => {}) }));
+  return [...own, ...(own.length && extras.length ? [{ kind: 'sep' } as MenuEntry] : []), ...extras];
+}
+
+/** Header (and the compact sticky header): the one primary action, then ⋯ with the rest. */
+export function HeaderActions({ set, extras, size = 'md', title, primary = true }: { set: ActionSet; extras: MenuEntry[]; size?: 'sm' | 'md'; title: string; primary?: boolean }) {
+  const phone = useMedia();
+  const items = menuOf(set, extras, phone);
   return (
     <div className="sx-actions">
-      {set.note && !set.primary && <span className="small faint">{set.note}</span>}
-      {set.primary && <ActionButton a={set.primary} variant="secondary" size={size} />}
-      {set.secondary.map((a) => (
-        <ActionButton key={a.key} a={a} variant="secondary" size={size} />
-      ))}
+      {primary && set.note && !set.primary && <span className="small faint hide-mobile">{set.note}</span>}
+      {primary && set.primary && <ActionButton a={set.primary} variant="primary" size={size} />}
+      {items.length > 0 && <Menu label="Session actions" sheetTitle={title} items={items} trigger={(t) => <IconButton {...t} icon={<MoreHorizontal />} label="More actions" variant={size === 'sm' ? 'ghost' : 'secondary'} size={size} />} />}
     </div>
   );
 }
 
-/** Phone: fixed bar above the tab bar. The first action fills the width. */
-export function PhoneActionBar({ set }: { set: ActionSet }) {
-  const secondary = set.secondary.filter((a) => !a.desktopOnly);
-  if (!set.primary && !secondary.length && !set.note) return null;
+/** Phone: the primary action as a compact floating pill, bottom right above the tab bar. */
+export function PhoneFab({ set }: { set: ActionSet }) {
+  const a = set.primary;
+  if (!a) return null;
+  const label = a.short || a.label;
   return (
-    <>
-      <div className="sx-bar-spacer hide-desktop" aria-hidden="true" />
-      <div className="sx-bar hide-desktop" role="toolbar" aria-label="Session actions">
-        {set.primary ? (
-          set.primary.href ? (
-            <a className="btn primary grow" href={set.primary.href} target="_blank" rel="noreferrer">
-              {set.primary.icon}
-              {set.primary.short || set.primary.label}
-            </a>
-          ) : (
-            <button type="button" className="btn primary grow" onClick={set.primary.onClick}>
-              {set.primary.icon}
-              {set.primary.short || set.primary.label}
-            </button>
-          )
-        ) : (
-          set.note && <span className="small faint grow">{set.note}</span>
-        )}
-        {secondary.map((a) => (
-          <button key={a.key} type="button" className={`btn${a.danger ? ' danger' : ''}`} onClick={a.onClick} title={a.title} aria-label={a.label}>
-            {a.icon}
-            {a.short || a.label}
-          </button>
-        ))}
-      </div>
-    </>
+    <div className="sx-fab-dock hide-desktop">
+      {a.href ? (
+        <a className="btn primary sx-fab" href={a.href} target="_blank" rel="noreferrer">
+          {a.icon}
+          {label}
+        </a>
+      ) : (
+        <button type="button" className="btn primary sx-fab" onClick={a.onClick} title={a.title}>
+          {a.icon}
+          {label}
+        </button>
+      )}
+    </div>
   );
 }

@@ -2,17 +2,19 @@
 // Blueprint: docs/DESIGN.md §8 "Session".
 import React, { useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Bot, ChevronLeft, MessageSquareOff, Pencil, UserRound } from 'lucide-react';
-import { api, ApiError, useInvalidate, useSession, useTurns } from '../api';
+import { ArrowLeft, Bot, ChevronLeft, Copy, Eye, EyeOff, MessageSquareOff, Pencil, Split } from 'lucide-react';
+import { api, ApiError, useInvalidate, useSession } from '../api';
 import { liveLabel, liveState } from '../components/cards';
 import { Badge, Button, Callout, EmptyState, IconButton, LiveStatus, LoadingCard, Meta, PageHeader, ProjectGlyph, Skeleton, Snippet, WorkStatus, useToast } from '../components/ui';
-import { ago, fmtDate, fmtDateTime, shortModel } from '../util';
+import { ago, copy, fmtDateTime } from '../util';
 import type { SessionDetail } from '../types';
 import { Conversation } from '../components/session/Conversation';
 import { SessionSummary } from '../components/session/SessionSummary';
 import { SessionDetails } from '../components/session/SessionDetails';
-import { HeaderActions, PhoneActionBar, useSessionActions } from '../components/session/SessionActions';
-import { HARNESS_LABEL, harnessOf, useMedia } from '../components/session/shared';
+import { HeaderActions, PhoneFab, useSessionActions } from '../components/session/SessionActions';
+import { BranchBit } from '../components/session/LiveRows';
+import type { MenuEntry } from '../components/project/Menu';
+import { HARNESS_LABEL, branchOf, harnessOf, useMedia } from '../components/session/shared';
 import './Session.css';
 
 function StatusOf({ s }: { s: SessionDetail }) {
@@ -78,20 +80,9 @@ function RenameField({ s, onDone }: { s: SessionDetail; onDone: () => void }) {
   );
 }
 
-/** "2 prompts from you · 18 messages": the same counts the Conversation card shows (a message = a prompt and its reply;
- *  background events hidden, like the default conversation view). */
-function useCounts(s: SessionDetail) {
-  const { data } = useTurns(s.id);
-  const messages = data?.shown ?? null;
-  return [
-    s.humanPrompts > 0 ? <span title="Prompts you typed">{s.humanPrompts.toLocaleString('en-GB')} {s.humanPrompts === 1 ? 'prompt' : 'prompts'} from you</span> : null,
-    messages ? <span title="Messages in the conversation below: each is a prompt and the reply to it">{messages.toLocaleString('en-GB')} {messages === 1 ? 'message' : 'messages'}</span> : null,
-  ];
-}
-
+/** Project · branch (only when it isn't main/master) · last active. Everything else is in Details. */
 function HeaderMeta({ s }: { s: SessionDetail }) {
-  const harness = harnessOf(s);
-  const counts = useCounts(s);
+  const branch = branchOf(s);
   return (
     <Meta
       items={[
@@ -105,20 +96,32 @@ function HeaderMeta({ s }: { s: SessionDetail }) {
             {s.cwd.replace(/^\/home\/[^/]+/, '~')}
           </span>
         ),
-        s.worktree ? <span title={`Worktree ${s.worktree}`}>{s.worktree}</span> : s.branch ? <span className="mono" title="Branch">{s.branch}</span> : null,
-        <span title={fmtDateTime(s.startedAt)}>Started {fmtDate(s.startedAt)}</span>,
+        branch ? <BranchBit name={branch} /> : null,
         <span title={fmtDateTime(s.lastAt)}>last active {ago(s.lastAt)}</span>,
-        ...counts,
-        s.model ? <span>{harness === 'claude' ? shortModel(s.model) : s.model}</span> : null,
-        s.account ? (
-          <span className="chip mono" title={`Claude account ${s.account}`}>
-            <UserRound size={11} />
-            {s.account}
-          </span>
-        ) : null,
       ]}
     />
   );
+}
+
+/** The ⋯ entries that belong to the page rather than to running/resuming: rename, spin off, hide, copy command. */
+function usePageExtras(s: SessionDetail, onRename: () => void, set: ReturnType<typeof useSessionActions>): MenuEntry[] {
+  const inv = useInvalidate();
+  const toast = useToast();
+  const navigate = useNavigate();
+  const toggleHidden = () =>
+    api(`/api/sessions/${s.id}`, { method: 'PATCH', body: { hidden: !s.hidden } })
+      .then(() => {
+        toast(s.hidden ? 'Shown in lists again' : 'Hidden from lists');
+        inv('session', 'sessions', 'overview', 'project', 'day');
+      })
+      .catch((e) => toast(e.message, true));
+  const hasCopy = set.primary?.key === 'copy' || set.secondary.some((a) => a.key === 'copy');
+  return [
+    { label: 'Rename…', icon: <Pencil />, hint: 'In Pilotage only', onSelect: onRename },
+    ...(s.projectId ? [{ label: 'Spin off into a new project…', icon: <Split />, onSelect: () => navigate(`/projects/${s.projectId}?spinoff=1&session=${encodeURIComponent(s.id)}`) } as MenuEntry] : []),
+    ...(hasCopy ? [] : [{ label: 'Copy resume command', icon: <Copy />, onSelect: () => copy(s.resumeCommand).then(() => toast('Resume command copied')) } as MenuEntry]),
+    { label: s.hidden ? 'Show in lists again' : 'Hide from lists', icon: s.hidden ? <Eye /> : <EyeOff />, hint: s.hidden ? undefined : 'It stays searchable', onSelect: toggleHidden },
+  ];
 }
 
 /** Desktop: a slim bar under the top bar once the page header has scrolled away. */
@@ -219,15 +222,16 @@ function SessionView({ s }: { s: SessionDetail }) {
   const harness = harnessOf(s);
   const st = liveState(s);
   const showSummary = s.kind !== 'automation' && (s.blocksDetail.length > 0 || !!s.recap);
+  const extras = usePageExtras(s, () => setEditing(true), set);
 
   return (
     <>
-      <CompactHeader s={s} visible={scrolled && !phone} actions={<HeaderActions set={set} size="sm" />} />
+      <CompactHeader s={s} visible={scrolled && !phone} actions={<HeaderActions set={set} extras={extras} title={s.title} size="sm" />} />
       <PhoneTitleBar s={s} visible={scrolled && phone} />
       <div ref={headRef}>
         <PageHeader
           className="sx-head"
-          crumbs={[{ label: 'Sessions', to: '/sessions' }, ...(s.projectId && s.projectName ? [{ label: <><ProjectGlyph name={s.projectName} ws={s.workspace} size={16} />{s.projectName}</>, to: `/projects/${s.projectId}` }] : [])]}
+          crumbs={[{ label: 'Sessions', to: '/sessions' }]}
           title={editing ? <RenameField s={s} onDone={() => setEditing(false)} /> : s.title}
           status={
             editing ? undefined : (
@@ -235,12 +239,11 @@ function SessionView({ s }: { s: SessionDetail }) {
                 <StatusOf s={s} />
                 {harness !== 'claude' && <Badge>{HARNESS_LABEL[harness]}</Badge>}
                 {s.hidden && <Badge tone="plain">Hidden from lists</Badge>}
-                <IconButton icon={<Pencil />} label="Rename (in Pilotage only)" onClick={() => setEditing(true)} className="sx-rename-btn" />
               </>
             )
           }
           subtitle={<HeaderMeta s={s} />}
-          actions={phone ? undefined : <HeaderActions set={set} />}
+          actions={<HeaderActions set={set} extras={extras} title={s.title} primary={!phone} />}
         />
       </div>
 
@@ -257,12 +260,12 @@ function SessionView({ s }: { s: SessionDetail }) {
 
       <div className="grid-main sx-grid">
         <div className="stack-lg sx-main">
-          {showSummary && <SessionSummary s={s} collapsible={phone} />}
+          {showSummary && <SessionSummary s={s} collapsible />}
           <Conversation s={s} />
         </div>
         <SessionDetails s={s} />
       </div>
-      <PhoneActionBar set={set} />
+      <PhoneFab set={set} />
     </>
   );
 }

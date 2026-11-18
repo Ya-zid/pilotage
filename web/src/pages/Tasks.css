@@ -9,13 +9,14 @@
   margin-bottom: -4px;
 }
 
-/* toolbar */
+/* toolbar: [search] [Filter] … [List | Board] in one row */
 .task-toolbar {
   gap: 8px;
+  flex-wrap: nowrap;
 }
 .task-search {
-  flex: 1 1 220px;
-  max-width: 300px;
+  flex: 0 1 320px;
+  min-width: 0;
 }
 .task-search > .input {
   padding-right: 32px;
@@ -28,53 +29,36 @@
   right: 9px;
   pointer-events: none;
 }
+.task-filter-toggle {
+  flex: none;
+}
 .task-filter {
   width: auto;
-  flex: 0 1 180px;
-  min-width: 0;
+  min-width: 180px;
+  max-width: 260px;
   height: 34px;
   min-height: 34px;
   padding-top: 0;
   padding-bottom: 0;
   font-size: var(--fs-sm);
 }
-.task-filter-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 14px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--r-lg);
-  margin-top: -8px;
-}
-.task-filter-panel .task-filter {
-  flex: none;
-  width: 100%;
-}
-.task-filter-panel .seg {
-  display: flex;
-}
-.task-filter-panel .seg button {
-  flex: 1;
-  justify-content: center;
-}
 
 @media (max-width: 860px) {
   .tasks-page {
     gap: 20px;
   }
-  .task-toolbar {
-    flex-wrap: nowrap;
-  }
+  /* one 44px row: search + Filter */
   .task-search {
-    max-width: none;
     flex: 1 1 auto;
   }
-  .task-filter-toggle {
-    flex: none;
+  .task-search > .input,
+  .task-filter-toggle.btn {
+    height: 44px;
+    min-height: 44px;
   }
   .task-filter {
+    width: 100%;
+    max-width: none;
     height: 44px;
     min-height: 44px;
   }

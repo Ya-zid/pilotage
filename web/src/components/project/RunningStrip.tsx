@@ -1,10 +1,10 @@
-// Running sessions of a project, as one compact line under the header ("1 working · <title> · Open in Claude app").
+// Running sessions of a project, as one compact line under the header ("1 working · <title> · All N · 📱").
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { Smartphone } from 'lucide-react';
 import type { SessionSummary } from '../../types';
 import { StatusIcon } from '../ui';
 import { runLabel, runState, runSummary, sortRunning } from '../session/shared';
+import { AppLink } from '../session/LiveRows';
 
 export function RunningStrip({ sessions, onSeeAll }: { sessions: SessionSummary[]; onSeeAll: () => void }) {
   const live = sortRunning(sessions.filter((s) => s.live));
@@ -22,20 +22,12 @@ export function RunningStrip({ sessions, onSeeAll }: { sessions: SessionSummary[
         </Link>
       </div>
       <div className="pj-run-actions">
-        {url ? (
-          <a className="btn sm pj-run-open" href={url} target="_blank" rel="noreferrer">
-            <Smartphone /> Open in Claude app
-          </a>
-        ) : (
-          <Link className="btn sm ghost" to={`/sessions/${top.id}`}>
-            View
-          </Link>
-        )}
         {live.length > 1 && (
           <button type="button" className="btn sm ghost" onClick={onSeeAll}>
             All {live.length}
           </button>
         )}
+        <AppLink url={url} />
       </div>
     </div>
   );

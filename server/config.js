@@ -35,7 +35,7 @@ export const IS_WSL = detectWsl();
 /** 'wsl' | 'linux' | 'darwin' | … (process.platform outside WSL). */
 export const OS_NAME = IS_WSL ? 'wsl' : process.platform;
 export const DATA = process.env.PILOTAGE_DATA || path.join(ROOT, 'data');
-export const WEB_DIST = path.join(ROOT, 'web', 'dist');
+export const WEB_DIST = process.env.PILOTAGE_WEB_DIST || path.join(ROOT, 'web', 'dist'); // override: preview builds
 export const PORT = Number(process.env.PILOTAGE_PORT || 4747);
 /** Port the Windows-side forwarder listens on (Wi-Fi / NetBird). */
 export const LAN_PORT = Number(process.env.PILOTAGE_LAN_PORT || 4748);

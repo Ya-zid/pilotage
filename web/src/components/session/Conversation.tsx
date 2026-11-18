@@ -489,8 +489,8 @@ export function Conversation({ s }: { s: SessionDetail }) {
       <h2>
         Conversation
         {total > 0 && (
-          <span className="count" title={showSys ? 'Messages, background events included' : 'Each message is a prompt and the reply to it'}>
-            {total.toLocaleString('en-GB')} {total === 1 ? 'message' : 'messages'}
+          <span className="count" title={`${total.toLocaleString('en-GB')} ${total === 1 ? 'message' : 'messages'}${showSys ? ', background events included' : ': each is a prompt and the reply to it'}`}>
+            {total.toLocaleString('en-GB')}
           </span>
         )}
       </h2>

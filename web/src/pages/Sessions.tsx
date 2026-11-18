@@ -4,10 +4,10 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
-import { Archive, Bot, CalendarDays, MessagesSquare, Search, SearchX, SlidersHorizontal, TriangleAlert, X } from 'lucide-react';
+import { Archive, Bot, CalendarDays, Info, MessagesSquare, Search, SearchX, SlidersHorizontal, TriangleAlert, X } from 'lucide-react';
 import { api, useLive, useProjects, useSearch } from '../api';
 import { useHarnesses } from '../api-extra';
-import { Button, Card, Dot, EmptyState, LoadingCard, Modal, PageHeader, SegmentedControl, Section, Spinner, StatusIcon, Toolbar, ToolbarSpacer } from '../components/ui';
+import { Button, Card, Disclosure, Dot, EmptyState, IconButton, LoadingCard, Modal, PageHeader, SegmentedControl, Section, Spinner, StatusIcon, Toolbar, ToolbarSpacer } from '../components/ui';
 import { plural } from '../util';
 import type { SessionSummary } from '../types';
 import { LaunchesSection, RunningGroups } from '../components/session/LiveRows';
@@ -193,8 +193,18 @@ export default function Sessions() {
   ) : null;
 
   const nothingAtAll = !isLoading && !error && !list.length && !extra.length;
+  // "Earlier" folds unless it's all there is or a search is narrowing the list; "Load more" then lives inside it
+  // (a folded body is hidden, so the infinite-scroll sentinel doesn't fire behind the fold).
+  const earlierFolded = !qd && groups.length > 1 && groups.some((g) => g.key === 'earlier');
+  const more = canMore ? (
+    <div className="ss-more" ref={sentinel}>
+      <Button loading={isFetching} onClick={() => setLimit((l) => l + STEP)}>
+        Load more
+      </Button>
+    </div>
+  ) : null;
   const history = (
-    <Link className={`btn ghost${phone ? ' sm ss-history' : ''}`} to="/history">
+    <Link className={`btn ghost${phone ? ' sm' : ''} ss-history`} to="/history">
       <CalendarDays /> History
     </Link>
   );
@@ -202,15 +212,8 @@ export default function Sessions() {
     <>
       <PageHeader
         title="Sessions"
-        // phone: History sits in the title row instead of taking a row of its own
-        status={phone ? history : undefined}
-        subtitle={
-          <>
-            One conversation with Claude Code, Codex or Gemini.{' '}
-            <button type="button" className="ss-legend-link" onClick={() => setLegend((v) => !v)} aria-expanded={legend}>
-              What the icons mean
-            </button>
-          </>
+        status={
+          <IconButton icon={<Info />} label="What the icons mean" onClick={() => setLegend((v) => !v)} aria-expanded={legend} className={`ss-info${legend ? ' on' : ''}`} />
         }
         actions={phone ? undefined : history}
       >
@@ -296,15 +299,35 @@ export default function Sessions() {
         </Card>
       ) : (
         <div className={`stack-xl ss-groups${isPlaceholderData && isFetching ? ' ss-stale' : ''}`}>
-          {groups.map((g) => (
-            <Section key={g.key} title={<span title={BUCKET_TITLE[g.key] || undefined}>{g.label}</span>} count={g.items.length}>
+          {groups.map((g) => {
+            const rows = (
               <Card flush>
                 {g.items.map((s) => (
                   <SessionListRow key={s.id} s={s} showProject={!project} when={g.key === 'today' || g.key === 'yesterday' ? 'time' : g.key === 'week' ? 'ago' : 'date'} />
                 ))}
               </Card>
-            </Section>
-          ))}
+            );
+            if (g.key === 'earlier' && earlierFolded)
+              return (
+                <Disclosure
+                  key={g.key}
+                  className="ss-earlier"
+                  summary={
+                    <span className="ss-earlier-sum">
+                      Earlier <span className="count">{canMore ? `${g.items.length}+` : g.items.length}</span>
+                    </span>
+                  }
+                >
+                  {rows}
+                  {more}
+                </Disclosure>
+              );
+            return (
+              <Section key={g.key} title={<span title={BUCKET_TITLE[g.key] || undefined}>{g.label}</span>} count={g.items.length}>
+                {rows}
+              </Section>
+            );
+          })}
           {extra.length > 0 && (
             <Section title="Found inside conversations" count={extra.length}>
               <Card flush>
@@ -314,13 +337,7 @@ export default function Sessions() {
               </Card>
             </Section>
           )}
-          {canMore && (
-            <div className="ss-more" ref={sentinel}>
-              <Button loading={isFetching} onClick={() => setLimit((l) => l + STEP)}>
-                Load more
-              </Button>
-            </div>
-          )}
+          {!earlierFolded && more}
           {!canMore && list.length > 20 && (
             <div className="ss-end tiny faint">
               {running.length ? `${plural(list.length, 'session')} here, plus ${running.length} running above. That’s all of them.` : `${plural(list.length, 'session')}, that’s all of them`}

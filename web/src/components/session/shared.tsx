@@ -39,6 +39,30 @@ export function runSummary(list: SessionSummary[]) {
   return [n['needs-you'] ? `${n['needs-you']} ${n['needs-you'] === 1 ? 'needs' : 'need'} you` : '', n.working ? `${n.working} working` : '', n.idle_live ? `${n.idle_live} open` : ''].filter(Boolean).join(' · ');
 }
 
+// ---------- quiet row metadata (calm redesign, principle 7: drop default/noise metadata) ----------
+/** Branch names that are just "the usual one": never shown on rows. */
+export const USUAL_BRANCHES = new Set(['main', 'master']);
+/** The worktree, or the branch when it isn't main / master / the repo default; null otherwise. */
+export function branchOf(s: Pick<SessionSummary, 'worktree' | 'branch'>, defaultBranch?: string | null): string | null {
+  if (s.worktree) return s.worktree;
+  if (s.branch && !USUAL_BRANCHES.has(s.branch) && s.branch !== defaultBranch) return s.branch;
+  return null;
+}
+/** The project a session belongs to, as a short name (falls back to the folder name). */
+export const projectNameOf = (s: Pick<SessionSummary, 'projectName' | 'cwd'>) => s.projectName || s.cwd.split('/').filter(Boolean).pop() || s.cwd;
+/** True when the title already says the project ("northwind-shop" in project northwind-shop). */
+export function sameName(a: string | null | undefined, b: string | null | undefined) {
+  const n = (x: string | null | undefined) => (x || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+  return !!n(a) && n(a) === n(b);
+}
+/** A running session's detail line, only when it's worth a line: what it waits for, or a short status. */
+export function usefulDetail(detail: string | null | undefined, needsYou: boolean) {
+  const t = (detail || '').trim();
+  if (!t) return '';
+  if (needsYou) return t;
+  return t.length <= 72 ? t : '';
+}
+
 /** Tracks a media query (defaults to the shell's phone breakpoint). */
 export function useMedia(query = '(max-width: 860px)') {
   const get = () => (typeof window !== 'undefined' && window.matchMedia ? window.matchMedia(query).matches : false);

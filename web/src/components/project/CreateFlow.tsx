@@ -14,6 +14,7 @@ export type DryRun = {
   ok: true;
   dryRun: true;
   path: string;
+  newParent?: string | null; // first folder on the way that doesn't exist yet (created too)
   displayPath: string;
   slug: string;
   parent: string;
@@ -88,10 +89,11 @@ export function PlanPreview({ plan, error, settling, gitInit, onUseSuggestion, c
     <div className={`pj-plan${settling ? ' settling' : ''}`} aria-live="polite">
       <span className="pj-plan-ico">{settling ? <Spinner size={16} /> : <FolderPlus size={17} />}</span>
       <div className="grow stack-sm">
-        <div className="overline">New folder</div>
+        <div className="overline">{plan.newParent ? 'New folders' : 'New folder'}</div>
         <div className="pj-plan-path mono break" title={plan.path}>
           {plan.displayPath}
         </div>
+        {plan.newParent && <div className="hint">Also creates {plan.newParent}.</div>}
         {plan.insideRepo && gitInit && <div className="hint">Inside the git repo {tilde(plan.insideRepo)}; it gets its own repository.</div>}
         {children}
       </div>

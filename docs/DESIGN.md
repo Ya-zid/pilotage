@@ -1,7 +1,8 @@
 # Pilotage design system: "Quiet instrument panel"
 
-> v3 (2026-11-15): navigation, vocabulary, status colours (summary statuses are neutral grey; accent = live Working only) and the Home layout changed — docs/SIMPLIFY.md is the source of truth where
-> this file disagrees (labels, status colours, tab bar, page structure). The visual language below still applies.
+> v4 (2026-11-18), the "calm" pass: the owner found v3 "hard to look at… all just text". First glance is now state
+> (counts, status dots, project glyphs, short titles), not prose. §2 lists the rules; docs/SIMPLIFY.md has the page
+> contracts and the vocabulary, and wins where the two disagree.
 
 This is the contract for every page in `web/src/pages/*`. Read it fully before you touch a page.
 Primitives live in `src/components/ui.tsx`, domain cards in `src/components/cards.tsx`, all styles in
@@ -32,26 +33,31 @@ as structure, color only for meaning).
 
 ## 2. Principles (the rules reviewers will check)
 
-1. **One primary line per item.** Title at 14–15px, weight 550–600. Everything else is smaller and greyer.
-2. **At most two lines of secondary text** (`Snippet lines={2}` / `clamp-2`). AI paragraphs longer than
-   three lines go in `ClampText`. Never dump a whole AI paragraph in a list row.
-3. **Metadata is text, not chips.** Use `<Meta items={[…]} />` (middot-separated, 12px, `--text-3`).
-   No row should carry more than **one** pill (a `LiveStatus`), and only when it means "live".
-4. **Status = glyph.** Use the shared vocabulary (§6). A row's status goes in the leading slot as a
-   `StatusIcon`. Words only on detail headers or when it's the point of the card.
-5. **Numbers are heroes.** Counts that matter are `StatTile`s (28–32px tabular figures), not a sentence
-   of counts in a subtitle.
-6. **One primary button per view.** It's white-on-dark (`.btn.primary`). In the shell that's
-   "New session", so most pages need **no** primary button of their own. Use secondary or ghost.
-7. **Generous spacing.** 28px between page sections (`.content` gap), 20px card padding, 13–14px row
-   padding. When in doubt, add space and remove a border.
-8. **Workspace identity everywhere a project appears**: `ProjectGlyph` (tinted initial tile) or
-   `WorkspaceAvatar`. Never a bare colored square in new code.
-9. **Phone is a first-class layout**, not a squeezed desktop: lists instead of card grids, 2-column stat
-   tiles, bottom sheets for modals, every control ≥ 40px tall (primary 44px). Hover-only actions don't
-   exist on phones.
-10. **No raw Markdown in snippets.** Rows use `Snippet` (strips Markdown). Only detail views render
-    `Markdown` (which drops raw HTML).
+1. **First glance = state, not prose.** Counts, status dots, project glyphs, short titles. Sentences only on tap
+   (an expanded row, a detail page, a `Disclosure`).
+2. **A row is one title line + at most one meta line.** Title 14px/550 `--text`; meta 12px `--text-3`, one line,
+   ellipsis (`Meta` inside a `ListRow` body does this by itself). No `--text-2` paragraphs inside list rows, no quoted
+   user prompts in rows. AI summaries go on detail pages (`ClampText`), never in lists.
+3. **One visible action per row, at most.** Everything else goes in a ⋯ menu, or appears on hover on a PC
+   (`.row-acts.hover`). Clicking the row opens it. On phones hover doesn't exist: the one action stays visible, the
+   rest live in the ⋯ sheet.
+4. **Sections carry the structure.** `Section` headings are 15px/650 `--text` with a count pill; consecutive
+   sections sit `--section-gap` apart (40px PC, 32px phone).
+5. **Identity color is the anchor.** A row about a project or session leads with its `ProjectGlyph` (24px), with the
+   status as a corner badge (`status` prop), not a separate status icon.
+6. **No dashed borders, no boxes inside boxes, no explanatory page subtitles.** Explanations go to /guide, an ⓘ, or a
+   `Disclosure`.
+7. **Drop default and repeated metadata**: "Terminal" when it's the default mode, the branch when it's main/master,
+   the project name when it equals the title.
+8. **Dark mode is the main use.** Cards must separate from the canvas (tokens do it: `--surface` above `--bg`, hairline,
+   `--card-shadow`). Check every page dark and light.
+9. **Hide, don't delete.** Every feature stays reachable (⋯ menu, fold, secondary nav).
+10. **One primary button per view** (white-on-dark `.btn.primary`; the shell's "New session" is usually it). Plain,
+    short English; no gendered words, no hardcoded names (`settings.profile.name`).
+
+Also still true: metadata is text, not chips (at most one pill per row, and only for "live"); status = glyph from
+the shared vocabulary (§6); phone is a first-class layout (lists, bottom sheets, controls ≥ 40px tall); `Snippet` strips
+Markdown, only detail views render `Markdown`.
 
 ## 3. Tokens
 
@@ -82,6 +88,11 @@ unless `<html data-theme="light|dark">` forces one (set from Settings → Appear
 | `--amber` | Needs attention: needs you, blocked, dirty, warnings |
 | `--red` | Errors, destructive |
 | `--blue`, `--violet`, `--teal` | Reserved for charts and ideas; not for status |
+| `--card-shadow` | Cards, tiles, board cards: soft drop in light mode, top highlight + drop in dark mode |
+| `--glyph-tint`, `--glyph-ink` | How strongly a `ProjectGlyph` takes its workspace hue (fill / letter); per theme |
+
+Dark mode (v4): canvas `#0b0c0f`, cards `#16171c`, hairlines 8.5% white, so a card always reads as a card. Light
+mode: canvas `#f8f8fa`, white cards.
 
 Compatibility aliases kept for old pages: `--ok`, `--live` (= green), `--busy` (= accent, i.e. "working"),
 `--warn` (= amber), `--danger` (= red), `--ok-soft`, `--warn-soft`, `--danger-soft`, `--teal`.
@@ -107,16 +118,17 @@ that can change or sits in a column.
 | `--fs-xs` | 12 / 12.5 | Metadata, labels, counts |
 | `--fs-2xs` | 11 | Glyph initials, tab-bar labels only |
 
-Section headings are **small and quiet** (13px/600, `--text-2`) so the content leads. Don't use
-uppercase labels.
+Section headings (v4) are **15px/650 `--text` with a count pill**: they carry the page structure. Card headings stay
+14px/600. Don't use uppercase labels.
 
 ### Space, radius, elevation, motion
 
-- Space: 4px grid, `--s-1`…`--s-12` = 4, 8, 12, 16, 20, 24, 32, 40, 48. Page sections 28px apart on
-  desktop, 24px on phone. Inside cards: 20px padding desktop, 16px phone. Row padding 13–14px × 20px.
+- Space: 4px grid, `--s-1`…`--s-12` = 4, 8, 12, 16, 20, 24, 32, 40, 48. `--flow-gap` (28px PC, 24px phone) between
+  the blocks of a page (`.content`); `--section-gap` (40px PC, 32px phone) between two `Section`s (`.section +
+  .section` adds the difference). Inside cards: 20px padding desktop, 16px phone. Row padding 13–14px × 20px.
 - Radius: `--r-xs` 4 (kbd), `--r-sm` 6 (small buttons, badges), `--r-md` 8 (buttons, inputs),
   `--r-lg` 12 (cards, `--radius`), `--r-xl` 16 (modals). Pills are `999px`.
-- Elevation: flat. Cards = `--surface` + `--border` (+ a 1px shadow in light mode only). Shadows
+- Elevation: flat. Cards = `--surface` + `--border` + `--card-shadow`. No dashed frames, no card inside a card. Shadows
   (`--shadow-md`, `--shadow-lg`) only for floating layers: modals, palette, toasts, tooltips.
 - Motion: `--ease` (cubic-bezier .2,.8,.2,1), `--dur-1` 120ms (hover/press), `--dur-2` 180ms
   (open/close, toggles), `--dur-3` 260ms (sheets, page fade). Only `working` and `needs-you` pulse.
@@ -125,7 +137,8 @@ uppercase labels.
 ### Iconography
 
 lucide-react, stroke 1.75 (set globally in CSS). Sizes: 16 in nav and buttons (15 in `.btn`, 14 in
-`.btn.sm`), 15 in section titles, 13–14 in metadata, 17–18 in empty-state tiles and callouts. Icons
+`.btn.sm`, 17 in `.btn.row-icon`), 16 in section titles, 13–14 in metadata, 17–18 in empty-state tiles and callouts.
+`StatusIcon` is 16 by default, 9–12 as a glyph corner badge, 11–13 inside pills. Icons
 are `--text-3` by default and only take a meaning color when they carry meaning (amber warning
 triangle). Don't put an icon on every heading. One per section at most, and none on rows that already
 have a status glyph.
@@ -135,16 +148,18 @@ have a status glyph.
 - Desktop (> 860px): 248px sidebar (`--bg-chrome`) + content column. Sticky 52px top bar with the
   search/palette trigger (Ctrl K) and the only primary button, **New session**. Content max width
   1200px, padding 32px 40px.
-- Phone (≤ 860px): compact header (brand, search icon), bottom tab bar
-  (Home, Sessions, ＋ New (create sheet), Tasks, More) — v3, see SIMPLIFY.md §3 with safe-area insets. Content padding 20px 16px and bottom
-  padding for the tab bar. Modals become bottom sheets with a grab handle; the palette drops from
-  the top.
+- Sidebar (v4): main **Home · Sessions · Projects · Tasks**; then **Recent projects** (the 5 most recently active,
+  running first: glyph + presence dot, click opens the project, ▶ on hover = New session there, "All projects"
+  link); then, smaller and at the bottom, **Ideas · History · Portfolio & CV · Settings · How Pilotage works** and the
+  two usage meters.
+- Phone (≤ 860px): compact header (brand, search icon), bottom tab bar **Home · Sessions · ＋ · Projects · More**
+  (＋ = create sheet; Tasks and Ideas live in More, whose tab shows a pip with today's + doing task count), with
+  safe-area insets. Content padding 20px 16px and bottom padding for the tab bar. Modals become bottom sheets with a
+  grab handle; the palette drops from the top.
 - Grids: `.grid-main` (content + 320px rail, stacks under 1100px), `.grid-cards` (auto-fill
   ≥ 320px), `.grid-stats` (auto-fit ≥ 180px, **2 columns on phone**), `.grid-2`, `.grid-3`.
 - Stacks: `.stack-sm` 4, `.stack` 8, `.stack-lg` 20, `.stack-xl` 32. Inline: `.row`, `.cluster`,
   `.spread`, `.grow`.
-- Sidebar workspace entries: tinted avatar with a green **presence dot** when something is live, the
-  project count on the right. The two are deliberately separate.
 - Don't use `window.scrollY` tricks or a page-level scroll container. The document scrolls.
 
 ## 5. Formats and copy
@@ -162,7 +177,7 @@ have a status glyph.
 - AI text: `Snippet` for one-liners (strips Markdown), `ClampText` for paragraphs, `Markdown` only on
   detail pages.
 - Copy: sentence case, plain words, no emoji, no ALL CAPS. Buttons are verbs ("Start session",
-  "Continue"). Subtitles are one calm sentence, not a list of counts.
+  "Continue"). Pages have no explanatory subtitle (v4); a detail page's header may carry one `Meta` line.
 
 ## 6. Status language (one vocabulary, two families)
 
@@ -195,6 +210,10 @@ glyph + plain text, no fill. In rows, use the glyph alone (`StatusIcon`) as the 
 Rules (v3): accent = in motion, amber = needs you, grey = open/idle, muted green = done, red = broken
 or asleep. Don't invent new status colors. Don't show "Active" on active projects.
 
+**C. Status as a corner badge (v4).** In rows, the project glyph leads and the state sits on its corner:
+`<ProjectGlyph … size={24} status={liveState} />` (working pulses accent, needs-you amber, open grey) or a work status
+(blocked, done, abandoned). Badge only the exception: a Pick up row that is simply "in progress" gets no badge.
+
 **Workspace identity:** `wsColor(key)` returns a hue from a 16-color palette, assigned so every known
 workspace gets a distinct color (deterministic for a given set). `registerWorkspaces()` is already
 called when projects, timeline or portfolio data load. If a project has `p.color`, pass it as `color`.
@@ -212,15 +231,16 @@ All of these are exported from `src/components/ui.tsx` unless noted.
   glyph={<ProjectGlyph name={p.name} ws={p.workspace} color={p.color} size={40} />}
   title={p.name}
   status={p.liveCount ? <LiveStatus state="idle_live" label={`${p.liveCount} live`} /> : <WorkStatus status={p.status} />}
-  subtitle={<Snippet text={p.oneLiner} lines={2} />}
-  actions={<><Button icon={<Code2 />}>VS Code</Button><IconButton icon={<MoreHorizontal />} label="More" variant="secondary" size="md" /></>}
+  subtitle={<Meta items={[branch, ago(p.lastAt)]} />}            // detail pages only: one Meta line, never an explanation
+  actions={<><Button icon={<Play />}>New session</Button><IconButton icon={<MoreHorizontal />} label="More" variant="secondary" size="md" /></>}
 >
   <Tabs value={tab} onChange={setTab} items={[{ value: 'overview', label: 'Overview' }, { value: 'board', label: 'Board', count: 7 }]} />
 </PageHeader>
 
-<Section title="Pick up where you left off" icon={<History />} count={6} actions={<Link className="small link" to="/sessions">All sessions</Link>}>
-  …
+<Section title="Needs you" count={2} countTone="amber" actions={<Link className="small" to="/sessions">Sessions</Link>}>
+  …                                         // heading 15/650 + count pill; next Section sits --section-gap below
 </Section>
+<CountPill n={3} tone="accent" />          // the same pill anywhere else (menus, More)
 
 <Card title="Brief" icon={<Sparkles />} actions={<span className="tiny faint">updated {ago(t)}</span>}>…</Card>
 <Card title="Sessions" count={13} flush>{sessions.map((s) => <SessionRow key={s.id} s={s} />)}</Card>   // flush = list inside
@@ -231,19 +251,24 @@ All of these are exported from `src/components/ui.tsx` unless noted.
 ### Rows
 
 ```tsx
-// Generic row: lead glyph · title · one-line sub · meta · trailing time. `to` makes the whole row a link;
-// buttons inside stay clickable. `actions` show on hover (desktop only, never the only path).
+// The v4 row: project glyph (24, status badge) · one title line · one meta line · at most one visible action.
+// `to` makes the whole row a link; buttons inside stay clickable. The Meta inside a ListRow body never wraps.
 <ListRow
   to={`/sessions/${s.id}`}
-  lead={<StatusIcon status={s.digest?.status || 'idle'} />}
+  lead={<ProjectGlyph name={s.projectName} ws={s.workspace} size={24} status={liveState(s) === 'idle_live' ? 'open' : liveState(s)} />}
   title={s.title}
-  sub={<Snippet text={s.digest?.summary} />}
-  meta={<Meta items={[<><ProjectGlyph name={s.projectName!} ws={s.workspace} size={14} />{s.projectName}</>, plural(s.humanPrompts, 'prompt')]} />}
-  trail={ago(s.lastAt)}
-  actions={<Button size="sm" variant="ghost" icon={<Play />}>Continue</Button>}
+  meta={<Meta items={[s.projectName !== s.title && s.projectName, ago(s.lastAt)]} />}
+  actions={<Button size="sm" variant="ghost" icon={<Play />}>Resume</Button>}   // hover-only on PC, hidden on phone
 />
 <ListRow dense lead={<Settings2 size={16} className="faint" />} title="Settings" to="/settings" />   // menus (phone More page)
 ```
+
+Hand-built rows (`.lrow` + `.lrow-link` + `.lrow-lead` / `.lrow-body`) put their actions in **`.row-acts`**:
+`<div className="row-acts hover">` appears on hover on a PC with a mouse and stays visible on touch;
+`<div className="row-acts">` with one child `.hover` hides only that child (e.g. "＋ Today" visible, ⋯ on hover).
+The icon action of a row is **`.btn.row-icon`** (borderless, 32px PC / 40px phone: Smartphone = open in Claude app,
+MoreHorizontal = ⋯ menu; the menu itself is `Menu` from `tasks/TaskBits`). `.lrow-sub` is `--text-3`: use it for
+one short line (Claude's question on a Needs-you row), never a paragraph.
 
 Domain rows/cards from `cards.tsx` (use these, don't rebuild them):
 
@@ -262,8 +287,10 @@ Domain rows/cards from `cards.tsx` (use these, don't rebuild them):
 ```tsx
 <LiveStatus state={liveState(s)!} label={liveLabel(s)} />       // process: pill with dot
 <WorkStatus status={d.status} />                                // work: glyph + text, no fill
-<StatusIcon status="blocked" />                                 // glyph only (row lead), has a title tooltip
-<ProjectGlyph name={p.name} ws={p.workspace} color={p.color} size={32} />   // 14 (meta), 20 (lists), 26–32 (cards), 40 (headers)
+<StatusIcon status="blocked" />                                 // glyph only (16px), has a title tooltip
+<ProjectGlyph name={p.name} ws={p.workspace} color={p.color} size={32} />   // 14 (meta), 18 (sidebar), 24 (row lead), 26–32 (cards), 40 (headers)
+<ProjectGlyph name={p.name} ws={p.workspace} size={24} status="working" statusTitle="Working" />   // state as a corner badge
+// the badge ring uses --badge-bg (default --surface): set it on a tinted container (e.g. the amber Needs-you card)
 <WorkspaceAvatar ws={key} name={w.name} size={18} />
 <AvatarStack items={workspaces.map((w) => ({ key: w.key, name: w.name, ws: w.key }))} max={4} />
 ```
@@ -352,90 +379,59 @@ Columns scroll horizontally and snap (84% width on phones). An empty column says
 
 ## 8. Page blueprints
 
-Every page: `PageHeader` → (optional `StatTile` row) → content. Max about five primary blocks above
-the fold. Desktop numbers below assume 1440px wide (about 1120px content).
+Every page: `PageHeader` (title, no explanatory subtitle) → content in `Section`s. Max about five primary blocks above
+the fold. Desktop numbers below assume 1440px wide (about 1120px content). Page contracts and what each section
+holds: docs/SIMPLIFY.md; the visual recipe per page is below.
 
-### Today `/`
-- **Header**: "Good evening, Sam" (the name from Settings) + date line ("Sunday 15 November"). No counts in the subtitle.
-- **Stat row** (`grid-stats`, 4 tiles): *Live now* (n, hint "3 working · 1 needs you", `to="/live"`),
-  *Active projects*, *This week* (prompts + commits, delta vs last week, 14-day sparkline),
-  *5-hour usage* (%, hint "resets 14:30"; amber ≥ 60%).
-- **Main column** (`grid-main` left):
-  1. *Focus* card (daily brief): headline as `.lead` (2 lines max); up to 3 focus items as rows
-     (`ProjectGlyph`, title, one-line "why", **Start** button); "Slipping" items and AI ideas each
-     inside a `Disclosure` ("2 things slipping", "3 ideas"). Brief missing: `EmptyState` with
-     "Write it now" (ghost).
-  2. *Live now*: `LiveCard` grid (max 4, then "N more live" link). Order: needs you, working, idle.
-  3. *Pick up where you left off*: `Card flush` of `BlockRow` (max 6) + "All sessions".
-- **Rail**: *Needs attention* (`Card flush` of `AttentionRow`, max 5 + "Show N more"), *Quick idea*
-  (textarea 2 rows + Save sm, `Kbd` Ctrl Enter hint), *Activity* (`MiniBars`, 28 days, links to
-  Timeline), *Automations (48 h)* collapsed in a `Disclosure`.
-- Don't repeat "New session" (it's in the shell). The phone-setup banner is a dismissible
-  `Callout`, shown only on PC and only until a phone is paired.
-- **Phone**: header, stat tiles 2×2 (Live, This week, Active, Usage), then *Live* (LiveCards, max 3),
-  *Focus*, *Pick up* (BlockRows), *Needs attention*, *Quick idea* last.
+### Home `/`
+- **Header**: date eyebrow + "Good evening, Sam" (name from Settings). Nothing else: no AI headline, no
+  "Updated · Refresh" (Today's plan refreshes by itself).
+- **Pulse tiles** right under it (`.pulse`, 4 small linked tiles, one row on phone too): Working (accent when > 0),
+  Needs you (amber when > 0), Today `done/planned` with a progress ring, To do. Number 24px (20 on phone), label 12px.
+- Then, each only when not empty: the catching-up pill, the phone-setup `Callout` (PC, until a phone is paired),
+  **Needs you** (amber card; glyph + badge, title, Claude's question as one line, project · waiting; one visible
+  "Open in Claude app"), **Running** (working then open, one line each on PC: glyph + badge, title, project · time on
+  the right, Smartphone icon on hover; > 6: "+N open"), **Today** (your picked tasks; else one line "✦ Claude suggests
+  3 for today ›" that unfolds rows: glyph, title, "＋ Today", ⋯ Start / Not today; tapping a row shows the why),
+  **Pick up** (5 rows: glyph + exception badge, title, project · age or "Gone quiet 6 d"; Resume + ⋯ on hover on PC,
+  ⋯ on phone).
+- No footer of counts, no stat tiles, no quick-idea box.
 
-### Projects `/projects`
-- **Header**: "Projects", subtitle "45 projects · 11 active".
-- **Toolbar**: search (`input-wrap`), `SegmentedControl` Current / Quiet / All / Done with counts,
-  `ToolbarSpacer`, grid/list toggle (`SegmentedControl size="sm"` with icons).
-- **Groups by workspace**: group header = `WorkspaceAvatar` 22px + name (15/600) + count (`.faint`)
-  + "N live" in green when relevant. Then `.grid-cards` of `ProjectCard`. Pinned projects first.
-- **List view**: `Card flush` with `ListRow` (lead `ProjectGlyph` 24, title, sub = one-liner, meta =
-  age · sessions · branch, trail = `LiveStatus` if live).
-- **Phone**: list view by default; toolbar = full-width search, segmented control on its own line
-  (horizontally scrollable). Workspace filter via `?ws=` shows the avatar + name in the header.
-
-### Project detail `/projects/:id`
-- **Header**: crumbs (Projects › workspace avatar + name), glyph 40px, title, status (`LiveStatus`
-  if live, else `WorkStatus` unless active), subtitle = one-liner (2 lines max). Actions: **New
-  session** is in the shell; here a secondary "New session in this project" is fine as the one
-  page-level action, plus an "Open" group (VS Code / Terminal / Explorer as `IconButton`s with
-  tooltips) and a `…` overflow (status, pin, edit). Path goes in the overflow/Details, not under
-  the title.
-- **Tabs**: Overview · Board · Threads · Sessions · Worktrees · Docs · Notes (counts in tabs).
-- **Overview**: left = Brief card (description `ClampText lines={3}`, "Where it stands" `.lead`,
-  next steps as rows with a Start button), right rail = small `StatTile`s (sessions, prompts, commits
-  30d with sparkline), Git card (`.kv`: branch, changes, last commit with `ago`, "Recent commits" in a
-  `Disclosure`), stack as plain text ("Next.js · Supabase · Tailwind"), attention signals.
-- **Board (tasks)**: `Board` with To do / In progress / Blocked / Done. Until a real tasks API exists,
-  derive cards from `brief.nextSteps` (To do) and threads/blocks by digest status. Card click opens
-  the session (or New session prefilled with the step). **Phone**: replace the horizontal board with a
-  `SegmentedControl` of the four columns (with counts) and a list of the selected column.
-- **Threads**: one `Card` per thread: title + `WorkStatus` + summary (2 lines) + up to 3 `BlockRow`s
-  (`showProject={false}`) and "Show N more".
-- **Sessions**: `Card flush` of `SessionRow showProject={false}`, grouped by `fmtDay`.
-- **Worktrees**: `ListRow` with `PathLabel inline mono`, meta (branch, ±dirty, ↑ahead, sessions),
-  `WorkStatus status="done" label="Merged"` when merged, cleanup hint as amber text.
-- **Docs**: grouped `Card flush`, rows with `PathLabel` (so Claude memory files read
-  `feedback_style.md · …/-home-alex-pilotage/memory`).
-- **Notes & links**: textarea (`.textarea`), links as rows with `ExternalA`.
+### Sessions `/sessions`
+- Header: "Sessions" + ⓘ (icon legend) + "History" link. No subtitle.
+- **Running** on top (Needs you · Working · Open), then the list in date buckets with "Earlier" folded. Rows: one
+  line by default (glyph + badge, title, project · time); the AI summary line only for search matches; never the last
+  prompt. One icon action (Smartphone) on hover on PC / borderless 40px on phone; Resume in ⋯ / on hover.
+- Meta drops defaults: "Background" only when it isn't the default mode, branch only when not main/master, project
+  only when it differs from the title.
 
 ### Session `/sessions/:id`
-- **Header**: crumbs (Sessions › project), title, status (`LiveStatus` when live, else `WorkStatus`
-  of the latest digest), subtitle = `Meta` (project glyph+name · started `fmtDate` · `plural` prompts ·
-  model · branch). Actions: live → "Open in Claude app" (secondary with Smartphone icon); otherwise
-  Resume / Fork as secondary; rename in the overflow.
-- **Layout**: `grid-main`. Left: Summary card first (digest blocks as compact rows: glyph, title,
-  outcome clamp 2, next step), then *Conversation*. Right rail: Files (`PathLabel` rows, top 8 +
-  "Show all"), Tools (plain text "Bash 5,815 · Read 204 · …"), Details (`.kv` in a `Disclosure`:
-  version, entrypoint, tokens, size, resume command with `CopyButton`).
-- **Conversation**: user prompts as `.bubble-user` (left aligned, max 72ch); Claude replies as
-  `Markdown` in `.readable`; long replies `ClampText fade lines={14}`; tool calls always collapsed
-  (`Disclosure summary="3 tool calls"`); work-block boundaries as `.block-sep` with `WorkStatus` and
-  title; system/background events hidden behind a toggle and shown as `.bubble-sys`.
-- **Phone**: Summary collapsed into a `Disclosure` above the conversation; actions full width under
-  the header; rail content moves below the conversation.
+- Header meta: project · branch (if not main/master) · last active. **One** primary button: Open in Claude app when
+  running, else Resume. Spin off and per-block task chips live in ⋯.
+- Summary folded by default (PC too); "Files edited most" and "Tools" share one "Details" fold.
+- Phone: a compact floating pill button (bottom right, above the tab bar) instead of a full-width sticky bar.
 
-### Live `/live`
-- **Header**: "Live", subtitle "6 running · 3 working · 1 needs you".
-- Sections in this order, each only if non-empty: *Needs you*, *Working*, *Idle*: `LiveCard`
-  grid. Recent launches (starting…) as rows with a `Spinner`.
-- "How this works" goes in a `Disclosure` at the bottom, not a card.
-- Empty: `EmptyState icon={<Radio />} title="Nothing running" action={New session}`.
-- **Phone**: same order, cards stacked; the card's first button is "Open in Claude app".
+### Projects `/projects`
+- Header: "Projects" + New project. Toolbar: search, Current / Quiet / Done / All, grid/list toggle.
+- Groups by workspace (avatar + name + count pill). Cards/rows get a direct ▶ "New session" icon button. Phone rows:
+  name, running pill, age. One folded line "Claude spotted N possible projects ›" → /ideas when N > 0.
 
-### Timeline `/timeline`
+### Project detail `/projects/:id`
+- Header: crumbs, glyph 40px, title, `LiveStatus` if running; max one primary button (New session); open-in buttons
+  and edit/status/pin in ⋯.
+- Overview: "Where it stands" = the summary clamped to 3 lines (tap to expand; never repeats the header line);
+  "What's next" = only your own To do / Doing tasks (hidden when empty, no AI Keep/Dismiss here); Workstreams;
+  Details card folded, below the main column.
+
+### Tasks `/tasks` and Ideas `/ideas`
+- Tasks: no subtitle; List view by default (Board stays an option); search + filters behind one compact "Filter" row
+  (one 44px row on phone). Titles clamp to two lines in CSS. Suggested rows: title + project · age only (detail and
+  source in the task sheet), grouped by project with "+N more". Done hides tasks Claude closed by itself behind one
+  "Show N closed automatically" toggle. A small You / Claude marker per task.
+- Ideas: no subtitle; cards = title + 2-line pitch + source; evidence and first steps behind one disclosure;
+  actions "Make it a project" + ⋯.
+
+### History `/history` (the old Timeline)
 - **Header** + stat row: Active days, Prompts, Commits, Current streak, Longest streak (`StatTile`,
   `size="sm"`).
 - **Heatmap card** full width (accent scale `.heat`/page CSS, cells 12px, legend Less→More).
@@ -449,7 +445,7 @@ the fold. Desktop numbers below assume 1440px wide (about 1120px content).
   scroll and 14px cells (tap target), day panel below, rail after.
 
 ### Portfolio & CV `/portfolio`
-- **Header**: "Portfolio & CV", subtitle with the included count; actions: Export (secondary).
+- **Header**: "Portfolio & CV"; actions: Export (secondary).
 - **Toolbar**: search, `SegmentedControl` (Included / All), language `SegmentedControl` (EN / FR).
 - **Cards** (one column, `readable` width): `ProjectGlyph` 32 + title + period (right, `.num`
   `.faint`), tagline (`.lead` small), role, bullets (max 3 visible, `ClampText`), stack as plain
@@ -457,15 +453,6 @@ the fold. Desktop numbers below assume 1440px wide (about 1120px content).
   cards at 60% opacity.
 - **Rail** (desktop): export preview (Markdown, mono) with `CopyButton`. **Phone**: export opens a
   bottom sheet.
-
-### Ideas `/ideas`
-- **Composer** at the top (no card title): auto-growing textarea, project `select`, `Kbd`
-  "Ctrl ↵" hint, **Save** (`.btn.sm`, the one primary on this page is acceptable here).
-- Filters: `SegmentedControl` Open / Done / All with counts; project filter as `select`.
-- **List**: `Card flush` of `ListRow`: lead `StatusIcon` (`todo` / `done`), title = idea text
-  (`clamp-2`), meta = `ProjectGlyph`+project · `ago` · source ("from brief"), actions = Start
-  session / Done / Delete (hover on desktop; on phone tap the row to open an action sheet `Modal`).
-- Empty: `EmptyState` with Lightbulb.
 
 ### Settings `/settings`
 - Desktop: left sticky section nav (vertical `nav-item`-style list) + right column of `Card`s, one
@@ -476,8 +463,9 @@ the fold. Desktop numbers below assume 1440px wide (about 1120px content).
   (control under the label when it doesn't fit).
 
 ### More `/more` (phone only)
-- `Card flush` menu of `ListRow dense` with leading icons: Sessions, Timeline, Portfolio & CV,
-  Settings; then a usage card (two `Progress` rows: 5-hour window, This week, with reset times).
+- `Card flush` menu of `ListRow dense` (icon tile, one line each): Tasks (state line "2 for today · 5 to do" + accent
+  count pill), Ideas (possible projects / saved ideas), History, Portfolio & CV, Settings, How Pilotage works; then
+  the usage card (5-hour limit, Weekly limit, reset times).
 
 ## 9. Legacy classes (still styled, migrate when you rewrite a page)
 
@@ -493,8 +481,10 @@ chips, `EmptyState` over `Empty`.
 ## 10. Checklist before you hand a page back
 
 - [ ] Screenshot at 1440×900 and 390×844, dark and light. No horizontal scroll on the phone.
-- [ ] One `h1` (via `PageHeader`). Section headings are quiet. No uppercase labels.
-- [ ] Each row: one primary line, ≤ 2 secondary lines, metadata via `Meta`, status via glyph.
+- [ ] One `h1` (via `PageHeader`). Section headings via `Section`. No uppercase labels.
+- [ ] Each row: one title line + one meta line (`Meta`), project glyph lead with a status badge, at most one visible
+      action (the rest in ⋯ / on hover). No quoted prompts, no `--text-2` paragraphs in rows.
+- [ ] No dashed borders, no card inside a card, no explanatory page subtitle. Sections use `Section` (count pill).
 - [ ] No more than one pill per row/card; no stack chips in lists; no "Active" labels.
 - [ ] No raw hex colors, no new font sizes outside the scale, no inline `style` for colors.
 - [ ] Dates via `fmtDate`/`fmtDay`/`ago`, plurals via `plural`, numbers `.num`.

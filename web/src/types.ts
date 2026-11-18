@@ -22,7 +22,9 @@ export type Digest = {
   summary: string;
   outcome: string;
   status: 'done' | 'in_progress' | 'blocked' | 'abandoned' | 'ongoing';
-  nextStep: string;
+  nextStep: string; // written for Claude
+  todo?: string; // the same next step as a short to-do for the user (3-7 words)
+  who?: 'you' | 'claude' | 'waiting' | null; // who does the next step
   topic: string;
   kind?: string;
   cvWorthy?: boolean;
@@ -47,7 +49,7 @@ export type SessionSummary = {
   lastPrompt: string;
   recap: string | null;
   recapAt: number;
-  digest: Pick<Digest, 'title' | 'summary' | 'outcome' | 'status' | 'nextStep' | 'topic'> | null;
+  digest: Pick<Digest, 'title' | 'summary' | 'outcome' | 'status' | 'nextStep' | 'todo' | 'who' | 'topic'> | null;
   blocks: number;
   automation: string | null;
   model: string | null;
@@ -269,7 +271,7 @@ export type Settings = {
   /** Your name for the greeting and AI prompts; '' = detected (Bootstrap.user.detectedName). */
   profile?: { name: string };
   ai: { enabled: boolean; autoDigest: boolean; digestModel: string; briefModel: string; cvModel: string; maxFiveHourPct: number; maxSevenDayPct: number; concurrency: number; dailyBrief: boolean };
-  launch: { permissionMode: string; model: string; pcMode: 'terminal' | 'background'; phoneMode: 'terminal' | 'background' };
+  launch: { permissionMode: string; model: string; pcMode: 'terminal' | 'background'; phoneMode: 'terminal' | 'background'; trustFolders?: boolean };
   scan: { extraRoots: string[]; hiddenPaths: string[]; depth: number };
   ui: { theme: 'system' | 'light' | 'dark' };
 };

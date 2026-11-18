@@ -3,11 +3,14 @@ import path from 'node:path';
 import { HOME, CLAUDE_DIR } from '../config.js';
 import { clip, hash, oneLine, isInside, readJSONSync } from '../util.js';
 import { launch, getLaunch, sanitizeName } from '../launch.js';
+import { trustFolder } from '../claude-trust.js';
 import { callAI } from '../ai/providers.js';
 import { getWorkStore, STATUSES, OPEN_STATUSES, AI_KINDS } from '../work/store.js';
 import { reconcile, liveInput } from '../work/extract.js';
+import { makeCleanup } from '../work/retitle.js';
+import { classifyFailure } from '../ai/engine.js';
 import { userName } from '../profile.js';
-import { HttpError, planFolder, gatherSource, buildHandoff, queueAIHandoff, createProjectFolder, kickoffPrompt, cleanName, firstStepTitle, enclosingRepo, tilde } from '../work/spinoff.js';
+import { HttpError, planFolder, gatherSource, buildHandoff, queueAIHandoff, createProjectFolder, kickoffPrompt, cleanName, firstStepTitle, enclosingRepo, tilde, MAX_STARTER_TASKS } from '../work/spinoff.js';
 
 const STATUS_ORDER = { doing: 0, todo: 1, inbox: 2, done: 3, dropped: 4 };
 const RECENT_CLOSED = 14 * 86400e3;
@@ -55,6 +58,8 @@ export default function ({ route, ctx }) {
       snoozeUntil: it.snoozeUntil,
       dismissReason: it.dismissReason,
       restoredAt: it.restoredAt,
+      who: it.who || null,
+      titleBy: it.titleBy || null,
       launches: it.launches.map((l) => ({ launchId: l.launchId, at: l.at, mode: l.mode, sessionId: l.sessionId || getLaunch(l.launchId)?.sessionId || null })),
     };
   }
@@ -128,6 +133,15 @@ export default function ({ route, ctx }) {
       log.warn('work extraction failed', e.message);
     }
   }
+  // One-time tidy-up of the suggestions made before the short-title rules (work/retitle.js): through the AI queue.
+  const cleanup = makeCleanup({ work, ai, callAI, projectName, changed, log, classify: classifyFailure });
+  const cleanupTick = () => {
+    try {
+      cleanup.tick();
+    } catch (e) {
+      log.warn('work cleanup failed', e.message);
+    }
+  };
   const scheduleExtract = (reason, ms = 2500) => {
     clearTimeout(extractTimer);
     extractTimer = setTimeout(() => extractNow(reason), ms);
@@ -143,9 +157,13 @@ export default function ({ route, ctx }) {
     clearInterval(boot);
     booted = true;
     extractNow('startup');
+    cleanupTick();
   }, 2000);
   boot.unref?.();
-  ctx.every(10 * 60e3, async () => extractNow('periodic'));
+  ctx.every(10 * 60e3, async () => {
+    extractNow('periodic');
+    if (booted) cleanupTick();
+  });
 
   ctx.extendOverview(() => {
     const open = work.items.filter((it) => OPEN_STATUSES.has(it.status) && !projectHidden(it.projectPath));
@@ -350,12 +368,21 @@ export default function ({ route, ctx }) {
   async function finishCreate({ plan, name, goal, workspace, origin, src, related, ideaText, body, dev, rel }) {
     const h = await buildHandoff({ name, goal, origin, src, related, ideaText, callAI: body.useAI === false ? null : aiCaller('haiku') });
     const made = await createProjectFolder(plan, h.markdown, { gitInit: !!body.gitInit });
+    // Pilotage just made this folder and holds only what it wrote, so it can answer Claude Code's "trust this
+    // folder?" for it when the user turned that on (or ticked it here).
+    if (body.trust === true || store.settings.launch.trustFolders) {
+      try {
+        if ((await trustFolder(made.dir)).changed) log.info(`trust: marked ${tilde(made.dir)} as trusted in Claude Code (new project)`);
+      } catch (e) {
+        log.warn(`trust: could not mark ${tilde(made.dir)} as trusted: ${e.message}`);
+      }
+    }
     const patch = { name, status: 'active' };
     if (workspace) patch.workspace = workspace;
     store.patchProject(made.dir, patch);
     const now = Date.now();
     const relation = work.addSpinoff({ ...rel, to: made.dir, name, goal: clip(goal, 1000), createdAt: now });
-    const items = h.tasks.slice(0, 5).map((t, i) =>
+    const items = h.tasks.slice(0, MAX_STARTER_TASKS).map((t, i) =>
       work.add({
         projectPath: made.dir,
         title: firstStepTitle(t.title),
@@ -440,7 +467,7 @@ export default function ({ route, ctx }) {
     const plan = planFolder({ name, parentDir: body.parentDir, sourcePath: source.path });
     const repo = checkRepo(plan, !!body.gitInit);
     if (body.dryRun) {
-      return json(res, { ok: true, dryRun: true, path: plan.dir, displayPath: tilde(plan.dir), slug: plan.slug, parent: plan.parent, insideRepo: repo, workspace, goal, source: { projectId: source.id, name: origin.name, session: src.session, thread: src.thread, blocks: src.blocks.length, files: src.files.length } });
+      return json(res, { ok: true, dryRun: true, path: plan.dir, displayPath: tilde(plan.dir), slug: plan.slug, parent: plan.parent, newParent: plan.newParent ? tilde(plan.newParent) : null, insideRepo: repo, workspace, goal, source: { projectId: source.id, name: origin.name, session: src.session, thread: src.thread, blocks: src.blocks.length, files: src.files.length } });
     }
     const rel = { kind: 'spinoff', from: source.path, sessionId: src.session?.id || null, threadName: src.thread?.name || null };
     const scoutId = scoutIdOf(body);
@@ -470,7 +497,7 @@ export default function ({ route, ctx }) {
           .slice(0, 6)
           .map((p) => ({ name: projectName(p.path), path: p.path, oneLiner: ai.state.projects[p.path].brief.oneLiner, currentState: ai.state.projects[p.path].brief.currentState }))
       : [];
-    if (body.dryRun) return json(res, { ok: true, dryRun: true, path: plan.dir, displayPath: tilde(plan.dir), slug: plan.slug, parent: plan.parent, insideRepo: repo, workspace: workspace || null, goal, related: related.map((r) => r.name) });
+    if (body.dryRun) return json(res, { ok: true, dryRun: true, path: plan.dir, displayPath: tilde(plan.dir), slug: plan.slug, parent: plan.parent, newParent: plan.newParent ? tilde(plan.newParent) : null, insideRepo: repo, workspace: workspace || null, goal, related: related.map((r) => r.name) });
     const rel = { kind: 'new', from: null, ideaId: idea?.id || null };
     const scoutId = scoutIdOf(body);
     const scoutText = (scoutId && ctx.scout?.ideaText(scoutId)) || '';

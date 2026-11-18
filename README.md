@@ -39,15 +39,16 @@ and shows them in a web app you open on your PC or your phone. It never changes 
 
 | Page | What it's for |
 |---|---|
-| **Home** | Sessions that need you, today's plan (AI-proposed, you pick), what's working, and a "pick up" list of work you can resume |
+| **Home** | At a glance: what's working, what needs you, today's plan (AI-proposed, you pick) and a "pick up" list of work you can resume, one line each |
 | **Sessions** | Every session from Claude Code, Codex and Gemini CLI, with running ones on top (Needs you · Working · Open). Read the conversation, resume or fork it, open it in the Claude app |
-| **Tasks** | To do · Doing · Done, plus **Suggested**: tasks the AI found in your sessions' next steps. You keep or dismiss them; nothing lands on your board without you |
+| **Tasks** | To do · Doing · Done, plus **Suggested**: short to-dos the AI finds in your sessions, marked You or Claude. You keep or dismiss them; nothing lands on your board without you |
 | **Projects** | Every git repo or project folder, grouped by workspace (top-level folder), with an AI summary, workstreams, sessions, worktrees, notes and docs (incl. Claude memory files) |
 | **Ideas** | Your captured ideas, plus **possible projects** the project scout spotted: a tool you built inside another project, or a project you said you'd like to build |
 
 Also: **History** (year heatmap, "what did I do that day / week"), **Portfolio & CV** (AI-written project entries,
 EN/FR), **Spin off** (turn part of a project into a new folder with a `CLAUDE.md` handoff written from your past
-sessions), and starting or resuming sessions from the browser.
+sessions), and starting or resuming sessions from the browser or your phone (optionally answering Claude Code's
+"trust this folder?" for you, so a phone launch doesn't wait for someone at the PC).
 
 - **Multi-harness.** Claude Code (`~/.claude`, and the Windows-side `~/.claude` on WSL), Codex CLI (`~/.codex`) and
   Gemini CLI (`~/.gemini`) sessions all show up. More Claude config dirs (a second account) can be added in Settings.
@@ -145,7 +146,9 @@ Before `pilotage install`, use `bin/pilotage` from the clone.
 - A React web app (Vite) served by that server. Every page and API call needs a **paired device**.
 - Pilotage writes only to its own `data/` folder (state, caches, summaries, tokens), to new folders you explicitly
   create with Spin off / New project, and, if you run `pilotage install` on WSL, to a Startup entry, a Desktop
-  shortcut and the phone forwarder in `%LOCALAPPDATA%\Pilotage`.
+  shortcut and the phone forwarder in `%LOCALAPPDATA%\Pilotage`. One opt-in exception: with Settings → Trust
+  folders (or the checkbox when starting a session), it answers Claude Code's "trust this folder?" for you, which sets
+  one flag in `~/.claude.json` (see [SECURITY.md](SECURITY.md)).
 - **Nothing leaves your computer except AI calls**, and those go to the provider you choose. By default that is your
   own `claude -p` (your Claude subscription), run with no tools, no MCP servers and no session files, in an empty
   sandbox folder. Common secret formats in prompts (API keys, tokens, private keys) are redacted before anything is

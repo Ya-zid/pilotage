@@ -101,6 +101,82 @@
 }
 
 /* ---------- project tiles (Projects page) ---------- */
+.pcard.pt-card {
+  position: relative;
+  gap: 10px;
+}
+.pt-link {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: inherit;
+}
+.pt-link:focus-visible {
+  outline-offset: -2px;
+}
+.pt-card .pcard-head {
+  align-items: center;
+}
+.pt-card .pcard-head .glyph {
+  margin-top: 0;
+}
+.pt-head-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.pt-side {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  position: relative;
+  z-index: 1;
+  margin-right: -6px;
+}
+.pt-card .meta.pt-meta {
+  flex-wrap: nowrap;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.pt-card .desc {
+  color: var(--text-3);
+}
+.grid-cards > .pcard.pt-card > .desc {
+  min-height: 0;
+}
+.btn.icon.pt-play {
+  color: var(--text-3);
+}
+.btn.icon.pt-play:hover {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+}
+.btn.icon.pt-play svg {
+  width: 15px;
+  height: 15px;
+}
+/* PC: the ▶ shows on hover / keyboard focus, like the other row actions */
+@media (hover: hover) and (min-width: 861px) {
+  .pt-card .pt-play,
+  .pt-row .pt-play {
+    opacity: 0;
+    transition: opacity var(--dur-1);
+  }
+  .pt-card:hover .pt-play,
+  .pt-card:focus-within .pt-play,
+  .pt-row:hover .pt-play,
+  .pt-row:focus-within .pt-play {
+    opacity: 1;
+  }
+}
+.pt-row {
+  align-items: center;
+}
+.pt-row .lrow-trail {
+  gap: 6px;
+}
 .pt-card .pt-name {
   display: flex;
   align-items: center;
@@ -334,4 +410,20 @@
    so a wide child (the tab bar) widens the whole header line past the viewport on phones. */
 .ph.pj-ph {
   flex-wrap: nowrap;
+}
+.pt-card .pt-git {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.pt-card .pt-git > svg {
+  flex: none;
+}
+@media (max-width: 860px) {
+  /* phone rows: name, running pill, age (tasks and branch are on the project page) */
+  .pt-row .meta > :has(> .pt-git),
+  .pt-row .meta > :has(> .pt-tasks) {
+    display: none;
+  }
 }

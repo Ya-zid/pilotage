@@ -72,8 +72,8 @@ export const USAGE_LABELS = { five: '5-hour limit', seven: 'Weekly limit' } as c
 
 export const statusInfo = (s: string) => STATUS[s] || { label: s, tone: 'muted' as StatusTone, shape: 'ring' as Shape };
 
-/** Status glyph only (14px). Use in rows as the leading element. */
-export function StatusIcon({ status, size = 14, title }: { status: string; size?: number; title?: string }) {
+/** Status glyph only (16px; 10–11 as a glyph corner badge, 12–13 inside pills and tags). */
+export function StatusIcon({ status, size = 16, title }: { status: string; size?: number; title?: string }) {
   const st = statusInfo(status);
   const knock = { fill: 'none', stroke: 'var(--surface)', strokeWidth: 1.6, strokeLinecap: 'round', strokeLinejoin: 'round' } as React.CSSProperties;
   let body: React.ReactNode;
@@ -231,11 +231,12 @@ export function Tooltip({ label, children }: { label: string; children: React.Re
   );
 }
 
-/** Inline metadata separated by middots: <Meta items={[project, '3 prompts', ago]} /> */
-export function Meta({ items, children, className = '' }: { items?: React.ReactNode[]; children?: React.ReactNode; className?: string }) {
+/** Inline metadata separated by middots: <Meta items={[project, '3 prompts', ago]} />.
+ *  `line`: one line, never wraps; the first item shrinks with an ellipsis (automatic inside a ListRow body). */
+export function Meta({ items, children, className = '', line = false }: { items?: React.ReactNode[]; children?: React.ReactNode; className?: string; line?: boolean }) {
   const list = (items || React.Children.toArray(children)).filter((x) => x !== null && x !== undefined && x !== false && x !== '');
   return (
-    <div className={`meta ${className}`}>
+    <div className={`meta${line ? ' line' : ''} ${className}`}>
       {list.map((x, i) => (
         <span key={i}>{x}</span>
       ))}
@@ -271,14 +272,37 @@ function initialOf(name: string) {
   return m ? m[0].toUpperCase() : '·';
 }
 
-/** Tinted initial tile. Color comes from the workspace (ws key) or an explicit color. */
-export function ProjectGlyph({ name, ws, color, size = 20, solid = false, round = false, title }: { name: string; ws?: string | null; color?: string | null; size?: number; solid?: boolean; round?: boolean; title?: string }) {
+/**
+ * Tinted initial tile. Color comes from the workspace (ws key) or an explicit color.
+ * `status` adds the state as a corner badge (any STATUS key: working, needs-you, open, blocked, done…), so a row can
+ * lead with the project's identity and still show its state: <ProjectGlyph name ws size={24} status="working" />.
+ * The badge ring takes `--badge-bg` (default `--surface`); set it when the row sits on another background.
+ */
+export function ProjectGlyph({ name, ws, color, size = 20, solid = false, round = false, title, status, statusTitle }: { name: string; ws?: string | null; color?: string | null; size?: number; solid?: boolean; round?: boolean; title?: string; status?: string | null; statusTitle?: string }) {
   const c = color || (ws ? wsColor(ws) : undefined);
   const style: CSSVars = { width: size, height: size, fontSize: Math.max(9, Math.round(size * 0.48)), borderRadius: round ? 999 : Math.round(size * 0.3) };
   if (c) style['--ws'] = c;
-  return (
+  const tile = (
     <span className={`glyph${solid ? ' solid' : ''}${round ? ' round' : ''}`} style={style} title={title ?? name} aria-hidden="true">
       {initialOf(name)}
+    </span>
+  );
+  if (!status) return tile;
+  return (
+    <span className="glyph-wrap">
+      {tile}
+      <span className="glyph-badge">
+        <StatusIcon status={status} size={size >= 28 ? 12 : size >= 20 ? 11 : 9} title={statusTitle} />
+      </span>
+    </span>
+  );
+}
+
+/** A number in a small rounded pill (section / card headings, menus). `tone`: amber = needs you, accent = working. */
+export function CountPill({ n, tone, title }: { n: React.ReactNode; tone?: 'amber' | 'accent'; title?: string }) {
+  return (
+    <span className={`count-pill num${tone ? ` ${tone}` : ''}`} title={title}>
+      {n}
     </span>
   );
 }
@@ -596,14 +620,16 @@ export function Card({ title, icon, count, actions, footer, children, flush = fa
 }
 export const Panel = Card;
 
-export function Section({ title, icon, actions, count, children }: { title: React.ReactNode; icon?: React.ReactNode; actions?: React.ReactNode; count?: React.ReactNode; children: React.ReactNode }) {
+/** A page section: heading (15/650, count pill) + content. Consecutive sections get --section-gap between them.
+ *  `countTone`: amber for "needs you", accent for "working"; leave it out for plain counts. */
+export function Section({ title, icon, actions, count, countTone, children, className = '', id }: { title: React.ReactNode; icon?: React.ReactNode; actions?: React.ReactNode; count?: React.ReactNode; countTone?: 'amber' | 'accent'; children: React.ReactNode; className?: string; id?: string }) {
   return (
-    <section className="section">
+    <section className={`section ${className}`} id={id}>
       <div className="section-title">
         <h2>
           {icon}
           {title}
-          {count !== undefined && <span className="count">{count}</span>}
+          {count !== undefined && count !== null && <span className={`count num${countTone ? ` ${countTone}` : ''}`}>{count}</span>}
         </h2>
         {actions && <div className="cluster">{actions}</div>}
       </div>

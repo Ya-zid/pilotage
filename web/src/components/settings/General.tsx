@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Check, Cloud, Copy, FolderSearch, Laptop, Monitor, Moon, Palette, Rocket, Smartphone, Sun, Tag, Terminal, Info, ShieldCheck, UserRound } from 'lucide-react';
 import { useBootstrap, useInvalidate, useProjects } from '../../api';
 import type { Settings as SettingsT } from '../../types';
-import { Button, IconButton, SegmentedControl, Skeleton, WorkspaceAvatar, useToast } from '../ui';
+import { Button, IconButton, SegmentedControl, Skeleton, Switch, WorkspaceAvatar, useToast } from '../ui';
 import { copy, plural } from '../../util';
 import { PatchFn, PathList, SettingRow, SettingRows, SettingsCard, cap } from './common';
 
@@ -126,6 +126,16 @@ export function NewSessionsSection({ s, patch }: { s: SettingsT; patch: PatchFn 
             />
           </SettingRow>
         )}
+        <SettingRow
+          label={
+            <span className="row" style={{ gap: 8 }}>
+              <ShieldCheck size={15} className="faint" aria-hidden="true" /> Trust folders
+            </span>
+          }
+          hint="Claude Code asks “trust this folder?” once per folder, on the PC. On: Pilotage answers yes for folders you start sessions in and for projects it creates, so phone launches don't wait. Leave it off if you open code you didn't write."
+        >
+          <Switch on={!!l.trustFolders} onChange={(v) => setLaunch({ trustFolders: v }, v ? 'Folders you start in are trusted automatically' : 'Claude asks about new folders again')} label="Trust folders automatically" />
+        </SettingRow>
       </SettingRows>
     </SettingsCard>
   );

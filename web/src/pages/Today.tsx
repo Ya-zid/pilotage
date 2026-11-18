@@ -1,11 +1,10 @@
-// Home (route `/`): what to act on now, in one calm column. Order and rules: docs/SIMPLIFY.md §4.
-// Needs you → Today (your picks + Claude's proposals) → Working → Pick up → a footer of things to review elsewhere.
-// Stats, feeds and history live on History / Portfolio, not here.
+// Home (route `/`): how things stand, in one calm column. Order and rules: docs/SIMPLIFY.md §4.
+// Header (greeting + date) → pulse tiles → Needs you → Running → Today → Pick up. No prose until a row is tapped.
 import { useOverview } from '../api';
 import { liveState } from '../components/cards';
-import { Button, Card, EmptyState, LoadingCard, PageHeader, Skeleton } from '../components/ui';
+import { Button, Card, EmptyState, PageHeader, Skeleton } from '../components/ui';
 import { CatchingUp, HomeUndoToast, sortLive } from '../components/today/TodayBits';
-import { HomeFooter, HomeHeader, NeedsYou, PhoneSetup, PickUp, TodayPlan, Working, homeTitle, useUserName } from '../components/today/HomeSections';
+import { HomeHeader, NeedsYou, PhoneSetup, PickUp, PulseTiles, Running, TodayPlan, homeTitle, useUserName } from '../components/today/HomeSections';
 import { TaskUndoToast } from '../components/tasks/TaskBits';
 import { friendly, useMedia, useTick } from '../components/tasks/model';
 import './Today.css';
@@ -19,10 +18,15 @@ export default function Today() {
   if (isLoading)
     return (
       <div className="home" aria-busy="true">
-        <PageHeader className="home-head" title={homeTitle(name)} subtitle={<Skeleton h={14} w="70%" />} />
-        <LoadingCard lines={2} />
-        <LoadingCard lines={3} />
-        <LoadingCard lines={2} />
+        <PageHeader className="home-head" title={homeTitle(name)} />
+        <div className="pulse">
+          {[0, 1, 2, 3].map((i) => (
+            <div key={i} className="pulse-tile">
+              <Skeleton h={12} w="60%" />
+              <Skeleton h={22} w={28} />
+            </div>
+          ))}
+        </div>
       </div>
     );
   if (error || !o)
@@ -50,14 +54,14 @@ export default function Today() {
 
   return (
     <div className="home">
-      <HomeHeader o={o} />
+      <HomeHeader />
+      <PulseTiles o={o} needs={needs.length} working={working.length} />
       <CatchingUp o={o} />
       {!phone && <PhoneSetup />}
       <NeedsYou list={needs} />
-      <TodayPlan o={o} phone={phone} />
-      <Working working={working} idle={idle} />
+      <Running working={working} idle={idle} />
+      <TodayPlan o={o} />
       <PickUp items={o.pickup || []} phone={phone} />
-      <HomeFooter o={o} />
       <TaskUndoToast />
       <HomeUndoToast />
     </div>

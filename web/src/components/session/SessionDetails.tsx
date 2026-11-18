@@ -1,9 +1,9 @@
-// Right rail of the Session page (below the conversation on phones): files, tools, PRs, threads, facts.
+// Right rail of the Session page (below the conversation on phones): workstreams and PRs when there are any, then one
+// folded "Details" card (facts, files edited most, tools, the resume command, more details).
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Eye, EyeOff, GitPullRequest } from 'lucide-react';
-import { api, useInvalidate } from '../../api';
-import { Button, Card, CopyButton, Disclosure, Meta, PathLabel, compactNum, useToast } from '../ui';
+import { ChevronRight, GitPullRequest } from 'lucide-react';
+import { Card, CopyButton, Disclosure, Meta, PathLabel, compactNum } from '../ui';
 import { bytes, fmtDateTime, plural, shortModel } from '../../util';
 import type { SessionDetail } from '../../types';
 import { HARNESS_LABEL, harnessOf } from './shared';
@@ -15,34 +15,31 @@ function prLabel(url: string) {
   return m ? { repo: m[1], n: `#${m[2]}` } : { repo: url.replace(/^https?:\/\//, ''), n: '' };
 }
 
-function Files({ s }: { s: SessionDetail }) {
+function Files({ files }: { files: SessionDetail['files'] }) {
   const [all, setAll] = useState(false);
-  // An entry equal to the session folder is a tool pointed at the folder itself, not a file.
-  const files = s.files.filter((f) => f.path && f.path.replace(/\/+$/, '') !== s.cwd.replace(/\/+$/, ''));
   if (!files.length) return null;
   const shown = all ? files : files.slice(0, FILES_SHOWN);
   return (
-    <Card
-      title="Files edited most"
-      count={files.length}
-      flush
-      footer={
-        files.length > FILES_SHOWN ? (
-          <button type="button" className="more-link sx-more" onClick={() => setAll(!all)}>
-            {all ? 'Show fewer' : `Show all ${files.length}`}
-          </button>
-        ) : undefined
-      }
-    >
-      {shown.map((f) => (
-        <div key={f.path} className="sx-file">
-          <PathLabel path={f.path} />
-          <span className="num faint tiny" title={`${plural(f.n, 'edit')}`}>
-            {f.n}
-          </span>
-        </div>
-      ))}
-    </Card>
+    <div className="sx-dsec">
+      <div className="sx-dsec-h">
+        Files edited most <span className="count">{files.length}</span>
+      </div>
+      <div className="sx-files">
+        {shown.map((f) => (
+          <div key={f.path} className="sx-file">
+            <PathLabel path={f.path} />
+            <span className="num faint tiny" title={`${plural(f.n, 'edit')}`}>
+              {f.n}
+            </span>
+          </div>
+        ))}
+      </div>
+      {files.length > FILES_SHOWN && (
+        <button type="button" className="more-link sx-more" onClick={() => setAll(!all)}>
+          {all ? 'Show fewer' : `Show all ${files.length}`}
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -93,35 +90,20 @@ function MoreFacts({ s }: { s: SessionDetail }) {
 }
 
 export function SessionDetails({ s }: { s: SessionDetail }) {
-  const inv = useInvalidate();
-  const toast = useToast();
-  const [busy, setBusy] = useState(false);
-  const toggleHidden = () => {
-    setBusy(true);
-    api(`/api/sessions/${s.id}`, { method: 'PATCH', body: { hidden: !s.hidden } })
-      .then(() => {
-        toast(s.hidden ? 'Shown in lists again' : 'Hidden from lists');
-        inv('session', 'sessions', 'overview', 'project', 'day');
-      })
-      .catch((e) => toast(e.message, true))
-      .finally(() => setBusy(false));
-  };
+  const [open, setOpen] = useState(false);
+  // An entry equal to the session folder is a tool pointed at the folder itself, not a file.
+  const files = s.files.filter((f) => f.path && f.path.replace(/\/+$/, '') !== s.cwd.replace(/\/+$/, ''));
   const tools = s.tools.filter((t) => t.n > 0);
+  const toolCalls = s.counts?.toolUse || tools.reduce((n, t) => n + t.n, 0);
   return (
     <div className="sx-rail">
-      <Files s={s} />
-
-      {tools.length > 0 && (
-        <Card title="Tools">
-          <Meta
-            className="sx-tools"
-            items={tools.map((t) => (
-              <>
-                <span>{t.name}</span>
-                <span className="num">{t.n.toLocaleString()}</span>
-              </>
-            ))}
-          />
+      {s.threads.length > 0 && s.projectId && (
+        <Card title="Workstreams" count={s.threads.length} flush>
+          {s.threads.map((t) => (
+            <Link key={t} to={`/projects/${s.projectId}?workstream=${encodeURIComponent(t)}`} className="sx-link-row" title="Sessions about one goal inside the project, grouped by AI">
+              <span className="truncate">{t}</span>
+            </Link>
+          ))}
         </Card>
       )}
 
@@ -143,36 +125,45 @@ export function SessionDetails({ s }: { s: SessionDetail }) {
         </Card>
       )}
 
-      {s.threads.length > 0 && s.projectId && (
-        <Card title="Workstreams" count={s.threads.length} flush>
-          {s.threads.map((t) => (
-            <Link key={t} to={`/projects/${s.projectId}?workstream=${encodeURIComponent(t)}`} className="sx-link-row" title="Sessions about one goal inside the project, grouped by AI">
-              <span className="truncate">{t}</span>
-            </Link>
-          ))}
-        </Card>
-      )}
-
-      <Card title="Details">
-        <div className="stack-lg">
-          <Facts s={s} />
-          <div className="sx-resume">
-            <div className="sx-resume-label">Resume in a terminal</div>
-            <code className="sx-cmd" title={s.resumeCommand}>
-              {s.resumeCommand}
-            </code>
-            <div className="cluster">
-              <CopyButton text={s.resumeCommand} label="Copy command" />
-              <Button size="sm" variant="ghost" icon={s.hidden ? <Eye /> : <EyeOff />} loading={busy} onClick={toggleHidden} title={s.hidden ? 'Show this session in lists again' : 'Hide this session from lists (it stays searchable here)'}>
-                {s.hidden ? 'Show in lists' : 'Hide from lists'}
-              </Button>
+      <div className="card sx-fold">
+        <button type="button" className="sx-summary-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
+          <ChevronRight size={16} className="sx-chev" />
+          <span className="sx-summary-h">Details</span>
+          <span className="tiny faint truncate">{[files.length ? plural(files.length, 'file') : '', toolCalls ? plural(toolCalls, 'tool call') : ''].filter(Boolean).join(' · ')}</span>
+        </button>
+        {open && (
+          <div className="sx-fold-body">
+            <Facts s={s} />
+            <Files files={files} />
+            {tools.length > 0 && (
+              <div className="sx-dsec">
+                <div className="sx-dsec-h">Tools</div>
+                <Meta
+                  className="sx-tools"
+                  items={tools.map((t) => (
+                    <>
+                      <span>{t.name}</span>
+                      <span className="num">{t.n.toLocaleString()}</span>
+                    </>
+                  ))}
+                />
+              </div>
+            )}
+            <div className="sx-resume">
+              <div className="sx-resume-label">Resume in a terminal</div>
+              <code className="sx-cmd" title={s.resumeCommand}>
+                {s.resumeCommand}
+              </code>
+              <div className="cluster">
+                <CopyButton text={s.resumeCommand} label="Copy command" />
+              </div>
             </div>
+            <Disclosure summary="More details">
+              <MoreFacts s={s} />
+            </Disclosure>
           </div>
-          <Disclosure summary="More details">
-            <MoreFacts s={s} />
-          </Disclosure>
-        </div>
-      </Card>
+        )}
+      </div>
     </div>
   );
 }

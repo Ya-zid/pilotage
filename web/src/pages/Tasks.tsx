@@ -1,5 +1,6 @@
 // Tasks (SIMPLIFY §6): things you've decided to do (To do · Doing · Done), and the AI's suggestions kept apart in
 // their own tab until you keep or dismiss them. The UI itself is components/tasks/TasksView (shared with Project › Tasks).
+// No subtitle: how suggestions work is in a fold under the Suggested list and in /guide.
 import React, { useCallback, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useWork } from '../api-extra';
@@ -49,7 +50,7 @@ export default function Tasks() {
 
   return (
     <div className="tasks-page">
-      <PageHeader title="Tasks" subtitle="Things you’ve decided to do. Pilotage suggests tasks from your sessions; you keep or dismiss them.">
+      <PageHeader title="Tasks">
         <TasksTabs value={tab} onChange={setTab} counts={counts} />
       </PageHeader>
       <TasksView

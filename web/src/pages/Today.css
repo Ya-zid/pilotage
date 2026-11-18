@@ -2,7 +2,7 @@
 .home {
   display: flex;
   flex-direction: column;
-  gap: 28px;
+  gap: var(--flow-gap);
   width: 100%;
   max-width: 760px;
   margin: 0 auto;
@@ -12,8 +12,11 @@
 .home > .catchup {
   margin-bottom: -4px;
 }
-@media (max-width: 860px) {
-  .home {
-    gap: 24px;
-  }
+/* the pulse tiles belong to the header: closer to it than the sections are to each other */
+.home > .home-head + .pulse {
+  margin-top: -8px;
+}
+/* the first section after the tiles gets the full section gap too */
+.home > .pulse ~ .section:first-of-type {
+  margin-top: calc(var(--section-gap) - var(--flow-gap));
 }

@@ -11,7 +11,8 @@ export interface PickupItem {
   projectName: string;
   workspace: string | null;
   summary: string;
-  nextStep: string;
+  nextStep: string; // written for Claude (the Resume context)
+  todo?: string; // the same step as a short to-do (3-7 words), '' when the session is done
   status: string | null; // digest status: in_progress | blocked | ongoing | done | abandoned
   lastAt: number;
   quietDays: number;

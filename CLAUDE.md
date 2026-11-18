@@ -15,6 +15,7 @@ SECURITY.md for the security model, CONTRIBUTING.md for the rules).
 
 ## Hard rules
 - Read-only toward the user's projects and ~/.claude, ~/.codex, ~/.gemini (never write the agents' files; session renames live in data/state.json).
+  Only exception: server/claude-trust.js sets Claude Code's folder-trust flag in ~/.claude.json, opt-in (setting or launch checkbox), under Claude's lock.
 - Every git call uses `--no-optional-locks`.
 - Every /api route needs a paired device (cookie) or the CLI desktop key header; mutating routes need `X-Pilotage: 1` + JSON.
   Keep the Host allow-list (DNS-rebinding guard) and the 127.0.0.1 bind.

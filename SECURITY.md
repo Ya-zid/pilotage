@@ -61,6 +61,11 @@ for the setup and for how the traffic is protected on Wi-Fi and over a VPN.
 - **Writes**: its own `data/` folder; new folders you explicitly create (Spin off / New project), only inside your
   home folder and never inside `~/.ssh`, `~/.claude`, `~/.config` or Pilotage itself; and, if you run
   `pilotage install` on WSL, a Startup entry, a Desktop shortcut and `%LOCALAPPDATA%\Pilotage`.
+- **One exception to "never writes" an agent's files**, only when you ask for it (Settings → Trust folders, or the
+  "Trust this folder" checkbox when starting a session): it records Claude Code's answer to "Do you trust the files
+  in this folder?" for that folder, the `hasTrustDialogAccepted` flag in `~/.claude.json`. It changes nothing else,
+  takes the lock Claude Code uses for that file, replaces it in one step, and keeps the previous version in
+  `data/backups/claude-config/`. Never for the home folder. See `server/claude-trust.js`.
 - **Starts** coding-agent sessions only when you ask (a button or `pilotage new`), with the prompt passed through a
   file, never through a shell command line.
 

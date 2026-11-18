@@ -1,7 +1,9 @@
 // The Tasks UI (SIMPLIFY §6), shared by /tasks and Project › Tasks (same components, same two tabs):
-//   To do      board (To do · Doing · Done, drag between columns) or list; "Today" chip on flagged tasks.
+//   To do      a list by status (Doing · To do · Done) by default, or a board (drag between columns), or by project.
+//              "Today" chip on flagged tasks. Tasks Pilotage closed by itself stay out of sight behind one toggle.
 //   Suggested  the triage list (components/tasks/Suggested.tsx). Never on the board, never in the To do counts.
-// Dropped tasks (dismissed or expired suggestions included) sit in a fold at the bottom, restorable.
+// Search sits in one row with a Filter button (project, workspace, who added it, grouping) and the view switch.
+// Dropped tasks sit in a fold at the bottom, restorable from the task sheet.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { Archive, Columns3, List, ListChecks, Search, SlidersHorizontal, X } from 'lucide-react';
@@ -10,15 +12,17 @@ import { tasksDismissOld, tasksRestore, useWork } from '../../api-extra';
 import { Board, BoardColumn, Button, Card, Disclosure, EmptyState, Kbd, LoadingCard, ProjectGlyph, SegmentedControl, Section, StatusIcon, Tabs, Toolbar, ToolbarSpacer, useToast } from '../ui';
 import type { WorkItem, WorkStatus } from '../../types-extra';
 import { plural } from '../../util';
-import { TaskCard, TaskRow, TaskSheet, TaskUndoToast, useProjectIndex } from './TaskBits';
+import { TaskCard, TaskSheet, TaskUndoToast, useProjectIndex } from './TaskBits';
+import { TaskLine } from './TaskLine';
 import { TaskQuickAdd } from './TaskQuickAdd';
 import { SuggestedList } from './Suggested';
-import { BOARD_COLUMNS, friendly, isOldSuggestion, isPlannedToday, isSnoozed, isSuggested, offerUndo, OLD_DAYS, TASK_STATUS, useMedia, usePref, useTaskActions, useTick } from './model';
+import { BOARD_COLUMNS, friendly, isAutoClosed, isOldSuggestion, isPlannedToday, isSnoozed, isSuggested, offerUndo, OLD_DAYS, TASK_STATUS, useMedia, usePref, useTaskActions, useTick } from './model';
 import './tasks.css';
 
 export type TasksTabValue = 'todo' | 'suggested';
 type Who = 'all' | 'ai' | 'mine';
 type View = 'board' | 'list';
+type GroupBy = 'status' | 'project';
 const COL_CAP = 12;
 const STATUS_RANK: Record<WorkStatus, number> = { doing: 0, todo: 1, inbox: 2, done: 3, dropped: 4 };
 
@@ -123,13 +127,16 @@ export function TasksView({
   const phone = useMedia();
   const toast = useToast();
   const { setStatus } = useTaskActions();
-  const [view, setView] = usePref<View>(scoped ? 'pilotage.project.tasks.view' : 'pilotage.tasks.view', 'board');
+  // List is the default now (v2 keys, so an older "board" choice doesn't stick); Board stays one click away.
+  const [view, setView] = usePref<View>(scoped ? 'pilotage.project.tasks.view2' : 'pilotage.tasks.view2', 'list');
+  const [groupBy, setGroupBy] = usePref<GroupBy>('pilotage.tasks.groupBy', 'status');
   const [who, setWho] = usePref<Who>('pilotage.tasks.who', 'all');
   const [q, setQ] = useState('');
   const [proj, setProj] = useState(initialProject);
   const [ws, setWs] = useState(initialWorkspace);
   const [openId, setOpenId] = useState<string | null>(initialOpenId);
   const [showFilters, setShowFilters] = useState(false);
+  const [showAuto, setShowAuto] = useState(false);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [dragId, setDragId] = useState<string | null>(null);
   const [over, setOver] = useState<WorkStatus | null>(null);
@@ -187,21 +194,25 @@ export function TasksView({
     });
   }, [items, proj, ws, who, q, tab]);
 
+  // Closed by Pilotage itself: out of sight unless asked for (one toggle instead of a Restore on every card).
+  const autoClosed = useMemo(() => filtered.filter(isAutoClosed), [filtered]);
+  const visible = useMemo(() => (showAuto ? filtered : filtered.filter((it) => !isAutoClosed(it))), [filtered, showAuto]);
+
   const byStatus = useMemo(() => {
     const m: Record<WorkStatus, WorkItem[]> = { inbox: [], todo: [], doing: [], done: [], dropped: [] };
-    for (const it of filtered) m[it.status].push(it);
+    for (const it of visible) m[it.status].push(it);
     m.todo = sortTodo(m.todo);
     m.doing = sortTodo(m.doing);
     m.done.sort((a, b) => (b.doneAt || b.updatedAt) - (a.doneAt || a.updatedAt));
     m.dropped.sort((a, b) => b.updatedAt - a.updatedAt);
     return m;
-  }, [filtered]);
+  }, [visible]);
   const suggestions = byStatus.inbox.filter((it) => !isSnoozed(it, now));
   const snoozed = byStatus.inbox.filter((it) => isSnoozed(it, now));
   const oldOnes = scoped ? [] : items.filter((it) => isOldSuggestion(it, now));
 
-  const filtersOn = !!(proj || ws || (tab === 'todo' && who !== 'all') || q.trim());
   const nFilters = [proj, ws, tab === 'todo' && who !== 'all' ? who : ''].filter(Boolean).length;
+  const filtersOn = !!(nFilters || q.trim());
   const clearFilters = () => {
     setProj('');
     setWs('');
@@ -256,21 +267,20 @@ export function TasksView({
     ) : null;
   const capped = (key: string, list: WorkItem[], cap: number) => (expanded[key] ? list : list.slice(0, cap));
   const showProject = !scoped;
+  const line = (it: WorkItem, withProject = showProject) => <TaskLine key={it.id} it={it} project={pindex.get(it.projectId)} showProject={withProject} onOpen={() => setOpenId(it.id)} />;
 
   // ---------- To do content
   const todoTotal = byStatus.todo.length + byStatus.doing.length + byStatus.done.length;
   const statusSections = (
-    <div className="stack-xl task-groups">
+    <div className="task-groups">
       {(['doing', 'todo', 'done'] as WorkStatus[]).map((s) => {
         const list = byStatus[s];
         if (!list.length) return null;
-        const cap = s === 'done' ? 3 : 10;
+        const cap = s === 'done' ? 3 : 12;
         return (
           <Section key={s} title={<><StatusIcon status={TASK_STATUS[s].glyph} />{TASK_STATUS[s].label}</>} count={list.length}>
-            <Card flush>
-              {capped(s, list, cap).map((it) => (
-                <TaskRow key={it.id} it={it} project={pindex.get(it.projectId)} showProject={showProject} quick={!phone} hoverQuick onOpen={() => setOpenId(it.id)} />
-              ))}
+            <Card flush className="task-list">
+              {capped(s, list, cap).map((it) => line(it))}
               {list.length > cap && <div className="task-more-row">{more(s, list.length, cap)}</div>}
             </Card>
           </Section>
@@ -286,11 +296,11 @@ export function TasksView({
         <EmptyState
           icon={<ListChecks />}
           title="Nothing to do yet"
-          body={counts.suggested ? 'Keep tasks from Suggested, or add your own above.' : 'Add a task above. Pilotage also suggests tasks from your sessions; they wait in Suggested until you keep them.'}
+          body={counts.suggested ? 'Keep a suggestion, or add your own task above.' : 'Add a task above.'}
           action={
             counts.suggested ? (
               <Button size="sm" onClick={() => onTab('suggested')}>
-                Review {plural(counts.suggested, 'suggestion')}
+                See {plural(counts.suggested, 'suggestion')}
               </Button>
             ) : undefined
           }
@@ -300,7 +310,7 @@ export function TasksView({
   else if (!todoTotal)
     todoContent = (
       <Card>
-        <EmptyState compact icon={<Search />} title="No tasks match these filters" action={<Button size="sm" variant="ghost" icon={<X />} onClick={clearFilters}>Clear filters</Button>} />
+        <EmptyState compact icon={<Search />} title="No tasks match" action={<Button size="sm" variant="ghost" icon={<X />} onClick={clearFilters}>Clear filters</Button>} />
       </Card>
     );
   else if (view === 'board' && !phone)
@@ -323,7 +333,7 @@ export function TasksView({
               }}
               onDrop={drop(s)}
             >
-              <BoardColumn title={TASK_STATUS[s].label} status={TASK_STATUS[s].glyph} count={list.length} empty={dragId ? 'Drop here' : s === 'doing' ? 'Drag a task here, or start a session from one' : 'Nothing here'}>
+              <BoardColumn title={TASK_STATUS[s].label} status={TASK_STATUS[s].glyph} count={list.length} empty={dragId ? 'Drop here' : s === 'doing' ? 'Drag a task here' : 'Nothing here'}>
                 {capped(s, list, COL_CAP).map((it) => (
                   <TaskCard
                     key={it.id}
@@ -350,11 +360,11 @@ export function TasksView({
         })}
       </Board>
     );
-  else if (view === 'board' || scoped) todoContent = statusSections;
+  else if (scoped || groupBy === 'status') todoContent = statusSections;
   else {
     // list grouped by project
     const groups = new Map<string, WorkItem[]>();
-    for (const it of filtered) {
+    for (const it of visible) {
       if (it.status === 'dropped' || it.status === 'inbox') continue;
       const g = groups.get(it.projectId) || [];
       g.push(it);
@@ -367,7 +377,7 @@ export function TasksView({
         return score(b.list) - score(a.list) || a.list[0].projectName.localeCompare(b.list[0].projectName);
       });
     todoContent = (
-      <div className="stack-xl task-groups">
+      <div className="task-groups">
         {ordered.map(({ id, list }) => {
           const first = list[0];
           const p = pindex.get(id);
@@ -386,10 +396,8 @@ export function TasksView({
                 )}
                 <span className="faint small num">{openN ? `${openN} open` : 'all done'}</span>
               </div>
-              <Card flush>
-                {capped(`p:${id}`, list, cap).map((it) => (
-                  <TaskRow key={it.id} it={it} project={p} showProject={false} quick={!phone} hoverQuick onOpen={() => setOpenId(it.id)} />
-                ))}
+              <Card flush className="task-list">
+                {capped(`p:${id}`, list, cap).map((it) => line(it, false))}
                 {list.length > cap && <div className="task-more-row">{more(`p:${id}`, list.length, cap)}</div>}
               </Card>
             </section>
@@ -399,53 +407,70 @@ export function TasksView({
     );
   }
 
-  // ---------- toolbar
-  const filterControls = scoped ? null : (
-    <>
-      <select className="select task-filter" value={proj} onChange={(e) => setProj(e.target.value)} aria-label="Filter by project">
-        <option value="">All projects</option>
-        {projOptions.map((p) => (
-          <option key={p.id} value={p.id}>
-            {p.name}
-          </option>
-        ))}
-      </select>
-      {wsOptions.length > 1 && (
-        <select className="select task-filter" value={ws} onChange={(e) => setWs(e.target.value)} aria-label="Filter by workspace">
-          <option value="">All workspaces</option>
-          {wsOptions.map((w) => (
-            <option key={w.key} value={w.key}>
-              {w.name}
+  // ---------- toolbar: [search] [Filter] [List | Board], one row (one 44px row on a phone)
+  const filterPanel = scoped ? null : (
+    <div className="task-filter-panel" role="group" aria-label="Filters">
+      <label className="tfp-field">
+        <span className="tfp-label">Project</span>
+        <select className="select task-filter" value={proj} onChange={(e) => setProj(e.target.value)} aria-label="Filter by project">
+          <option value="">All projects</option>
+          {projOptions.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}
             </option>
           ))}
         </select>
+      </label>
+      {wsOptions.length > 1 && (
+        <label className="tfp-field">
+          <span className="tfp-label">Workspace</span>
+          <select className="select task-filter" value={ws} onChange={(e) => setWs(e.target.value)} aria-label="Filter by workspace">
+            <option value="">All workspaces</option>
+            {wsOptions.map((w) => (
+              <option key={w.key} value={w.key}>
+                {w.name}
+              </option>
+            ))}
+          </select>
+        </label>
       )}
       {tab === 'todo' && (
-        <SegmentedControl
-          size="sm"
-          label="Who created it"
-          value={who}
-          onChange={setWho}
-          options={[
-            { value: 'all', label: 'All' },
-            { value: 'ai', label: 'From AI', title: 'Suggested by Pilotage and kept by you' },
-            { value: 'mine', label: 'Mine', title: 'Tasks you added yourself' },
-          ]}
-        />
+        <div className="tfp-field">
+          <span className="tfp-label">Added by</span>
+          <SegmentedControl
+            size="sm"
+            label="Who added it"
+            value={who}
+            onChange={setWho}
+            options={[
+              { value: 'all', label: 'Anyone' },
+              { value: 'ai', label: 'Pilotage', title: 'Suggested by Pilotage and kept by you' },
+              { value: 'mine', label: 'You', title: 'Tasks you added yourself' },
+            ]}
+          />
+        </div>
       )}
-      {phone && tab === 'todo' && (
-        <SegmentedControl
-          block
-          label="Group by"
-          value={view}
-          onChange={setView}
-          options={[
-            { value: 'board', label: 'By status' },
-            { value: 'list', label: 'By project' },
-          ]}
-        />
+      {tab === 'todo' && (view === 'list' || phone) && (
+        <div className="tfp-field">
+          <span className="tfp-label">Group by</span>
+          <SegmentedControl
+            size="sm"
+            label="Group by"
+            value={groupBy}
+            onChange={setGroupBy}
+            options={[
+              { value: 'status', label: 'Status' },
+              { value: 'project', label: 'Project' },
+            ]}
+          />
+        </div>
       )}
-    </>
+      {filtersOn && (
+        <Button size="sm" variant="ghost" icon={<X />} onClick={clearFilters} className="tfp-clear">
+          Clear
+        </Button>
+      )}
+    </div>
   );
   const viewToggle =
     !phone && tab === 'todo' ? (
@@ -455,20 +480,14 @@ export function TasksView({
         value={view}
         onChange={setView}
         options={[
+          { value: 'list', label: <><List />List</>, title: 'One list by status' },
           { value: 'board', label: <><Columns3 />Board</>, title: 'Columns by status (drag cards between them)' },
-          { value: 'list', label: <><List />List</>, title: scoped ? 'One list by status' : 'Grouped by project' },
         ]}
       />
     ) : null;
-  const dismissOldBtn =
-    tab === 'suggested' && oldOnes.length > 0 ? (
-      <Button size="sm" variant="ghost" icon={<Archive />} loading={dismissingOld} onClick={dismissOld} title={`Dismiss the ${plural(oldOnes.length, 'suggestion')} nobody touched for ${OLD_DAYS} days (you can undo)`}>
-        Dismiss all older than {OLD_DAYS} days <span className="num faint">{oldOnes.length}</span>
-      </Button>
-    ) : null;
 
   const toolbar = scoped ? (
-    inlineTabs || viewToggle || dismissOldBtn ? (
+    inlineTabs || viewToggle ? (
       <Toolbar className="task-toolbar">
         {inlineTabs && <TasksTabs inline value={tab} onChange={onTab} counts={counts} />}
         <ToolbarSpacer />
@@ -482,7 +501,7 @@ export function TasksView({
         <input
           ref={searchRef}
           className="input"
-          placeholder={tab === 'suggested' ? 'Search suggestions…' : 'Search tasks…'}
+          placeholder={tab === 'suggested' ? 'Search suggestions' : 'Search tasks'}
           value={q}
           onChange={(e) => setQ(e.target.value)}
           onKeyDown={(e) => e.key === 'Escape' && (setQ(''), (e.target as HTMLInputElement).blur())}
@@ -491,21 +510,11 @@ export function TasksView({
         />
         {!phone && !q && <Kbd>/</Kbd>}
       </div>
-      {phone ? (
-        <Button variant={nFilters ? 'subtle' : 'secondary'} icon={<SlidersHorizontal />} onClick={() => setShowFilters((x) => !x)} aria-expanded={showFilters} className="task-filter-toggle">
-          {nFilters ? `Filters · ${nFilters}` : 'Filters'}
-        </Button>
-      ) : (
-        filterControls
-      )}
+      <Button size={phone ? 'md' : 'sm'} variant={nFilters ? 'subtle' : 'ghost'} icon={<SlidersHorizontal />} onClick={() => setShowFilters((x) => !x)} aria-expanded={showFilters} className="task-filter-toggle">
+        {nFilters ? `Filter · ${nFilters}` : 'Filter'}
+      </Button>
       {!phone && <ToolbarSpacer />}
-      {!phone && filtersOn && (
-        <Button size="sm" variant="ghost" icon={<X />} onClick={clearFilters}>
-          Clear
-        </Button>
-      )}
       {viewToggle}
-      {!phone && dismissOldBtn}
     </Toolbar>
   );
 
@@ -527,54 +536,68 @@ export function TasksView({
         onOpen={setOpenId}
         filtered={filtersOn}
         emptyAction={filtersOn ? <Button size="sm" variant="ghost" icon={<X />} onClick={clearFilters}>Clear filters</Button> : undefined}
+        footer={
+          !scoped ? (
+            <div className="task-foot">
+              {oldOnes.length > 0 && (
+                <Button size="sm" variant="ghost" icon={<Archive />} loading={dismissingOld} onClick={dismissOld} title={`Dismiss the ${plural(oldOnes.length, 'suggestion')} nobody touched for ${OLD_DAYS} days (you can undo)`}>
+                  Dismiss {oldOnes.length} older than {OLD_DAYS} days
+                </Button>
+              )}
+              <Disclosure summary="Where suggestions come from" className="task-fold">
+                <div className="stack small muted readable">
+                  <p>Each summarized session can suggest its next step, and each project summary its top two. Only recent work counts, near-duplicates are merged, and a project shows three suggestions at most.</p>
+                  <p>
+                    Untouched suggestions go away after {OLD_DAYS} days; you can bring them back. Once you keep one it’s yours.{' '}
+                    <Link to="/guide" className="link">
+                      How Pilotage works
+                    </Link>
+                  </p>
+                  {!phone && (
+                    <p className="sg-keys" aria-hidden="true">
+                      <Kbd>J</Kbd>
+                      <Kbd>K</Kbd> move · <Kbd>1</Kbd> Keep · <Kbd>2</Kbd> Today · <Kbd>3</Kbd> Dismiss · <Kbd>H</Kbd> Not now
+                    </p>
+                  )}
+                </div>
+              </Disclosure>
+            </div>
+          ) : undefined
+        }
       />
     );
   else body = todoContent;
 
   const dropped = byStatus.dropped;
   return (
-    <div className="tasks-view stack-lg">
+    <div className="tasks-view">
       {scoped && toolbar}
       {tab === 'todo' && <TaskQuickAdd projectId={projectId} defaultProject={proj} inputRef={addRef} />}
-      {!scoped && toolbar}
-      {phone && showFilters && !scoped && (
-        <div className="task-filter-panel">
-          {filterControls}
-          {filtersOn && (
-            <Button size="sm" variant="ghost" icon={<X />} onClick={clearFilters}>
-              Clear filters
-            </Button>
-          )}
+      {!scoped && (
+        <div className="task-toolbar-wrap">
+          {toolbar}
+          {showFilters && filterPanel}
         </div>
       )}
-      {phone && dismissOldBtn && <div className="task-phone-actions">{dismissOldBtn}</div>}
 
       {body}
 
-      {!isLoading && dropped.length > 0 && (
-        <Disclosure summary={<>{plural(dropped.length, 'dropped task')} <span className="faint">in the last 14 days</span></>} className="task-fold">
-          <Card flush>
-            {capped('dropped', dropped, 8).map((it) => (
-              <TaskRow key={it.id} it={it} project={pindex.get(it.projectId)} showProject={showProject} onOpen={() => setOpenId(it.id)} />
-            ))}
-            {dropped.length > 8 && <div className="task-more-row">{more('dropped', dropped.length, 8)}</div>}
-          </Card>
-          <div className="hint task-dropped-hint">Dismissed and expired suggestions land here too. Open one and use Restore to bring it back. Dropped tasks disappear after 14 days.</div>
-        </Disclosure>
-      )}
-
-      {tab === 'suggested' && !isLoading && !scoped && (
-        <Disclosure summary="Where suggestions come from" className="task-fold">
-          <div className="stack small muted readable">
-            <p>After each session is summarized, Pilotage turns its open next step into a suggestion, and each project summary adds its top next steps. Near-duplicates are merged.</p>
-            <p>
-              Suggestions wait here until you keep or dismiss them; nobody else sees them. Untouched ones are dropped after {OLD_DAYS} days (you can restore them). Once you keep a task it’s yours: the AI only adds a hint like “Looks done”.{' '}
-              <Link to="/guide" className="link">
-                How Pilotage works
-              </Link>
-            </p>
-          </div>
-        </Disclosure>
+      {tab === 'todo' && !isLoading && (dropped.length > 0 || autoClosed.length > 0) && (
+        <div className="task-foot">
+          {dropped.length > 0 && (
+            <Disclosure summary={<>Dropped <span className="num faint">{dropped.length}</span></>} className="task-fold">
+              <Card flush className="task-list">
+                {capped('dropped', dropped, 8).map((it) => line(it))}
+                {dropped.length > 8 && <div className="task-more-row">{more('dropped', dropped.length, 8)}</div>}
+              </Card>
+            </Disclosure>
+          )}
+          {autoClosed.length > 0 && (
+            <button type="button" className="task-more task-auto-toggle" onClick={() => setShowAuto((x) => !x)} aria-pressed={showAuto}>
+              {showAuto ? `Hide the ${autoClosed.length} closed automatically` : `Show ${autoClosed.length} closed automatically`}
+            </button>
+          )}
+        </div>
       )}
 
       {openItem && <TaskSheet key={openItem.id} it={openItem} onClose={closeSheet} />}
@@ -582,4 +605,3 @@ export function TasksView({
     </div>
   );
 }
-

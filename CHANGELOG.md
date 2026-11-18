@@ -7,8 +7,33 @@ minor versions.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-18
+
+A calmer UI: state at a glance instead of paragraphs, and short tasks.
+
+### Changed
+
+- Home: four counts at the top (working, needs you, today, to do), then Needs you, Running (one line per session),
+  Today (Claude's suggestions folded into one line) and Pick up. No AI headline paragraph.
+- Every list: one title line and one quiet meta line per row, one visible action (the rest under ⋯ or on hover),
+  project glyphs with a status badge, stronger section headings, no dashed frames; a clearer dark theme.
+- Navigation: Home, Sessions, Projects, Tasks, plus your five most recent projects in the sidebar. Phone tab bar:
+  Home, Sessions, +, Projects, More.
+- Session rows no longer quote your last prompt; the session page has one main button, with summary and details
+  folded. Projects get a New session button on every card.
+- Tasks: the AI now writes a 3–7 word to-do in your words (marked You, Claude or Waiting) next to the step it keeps
+  for Claude. Fewer, fresher suggestions: only from the last 10 days, at most 3 open per project, duplicates merged
+  across a folder and its subfolders, expiring after 7 days. A one-time pass (one AI call, within your usage limits)
+  shortens the titles you already have. Tasks opens as a list, with filters behind one button.
+- New session dialog: the project and your message; name, agent, mode and model under Options.
+- Resume opens with an empty message box (it used to pre-fill "Let's continue. Next step: …").
+
 ### Added
 
+- Settings → Trust folders (off by default), and a "Trust this folder" checkbox when starting a session: Pilotage
+  answers Claude Code's "Do you trust the files in this folder?" for you, so sessions started from the phone don't
+  wait for someone at the PC. It sets that one flag in `~/.claude.json`, under Claude Code's own lock, with a backup.
+- New project / spin-off: the folder to create it in may not exist yet; it is created along with the project.
 - CLI: `pilotage version` (also `-v`, `--version`) prints the installed version and short commit, and the version
   reported by a running server (with a hint to restart when the two differ).
 
@@ -38,5 +63,6 @@ First public release.
 - Security: a 127.0.0.1-only server, paired devices, one-time codes, a CSRF header, a Host allow-list and redaction
   of common secret formats.
 
-[Unreleased]: https://github.com/Ya-zid/pilotage/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Ya-zid/pilotage/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Ya-zid/pilotage/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Ya-zid/pilotage/releases/tag/v0.1.0

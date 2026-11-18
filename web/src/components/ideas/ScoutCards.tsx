@@ -1,11 +1,12 @@
 // Possible projects spotted by the AI scout (docs/SIMPLIFY.md §8, docs/API-SCOUT.md). Used by pages/Ideas.tsx (all
-// projects) and the project Overview (compact, one project). Each card shows the reason, never a score: the source
-// project, why, evidence, first steps. Actions: Make it a project (spin-off / new project dialog, prefilled, with
-// scoutId so the server marks it accepted) · Keep as idea · Not a project (with undo).
-import React, { useMemo, useState } from 'react';
+// projects) and the project Overview (compact, one project). A card is the title, a two-line pitch and where it came
+// from; the reason (why, evidence, first steps) is one disclosure away, never a score. Actions: Make it a project
+// (spin-off / new project dialog, prefilled, with scoutId so the server marks it accepted) and a ⋯ menu with Keep as
+// idea · Not a project (with undo).
+import React, { useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { FolderPlus, Lightbulb, Telescope, X } from 'lucide-react';
+import { FolderPlus, Lightbulb, MoreHorizontal, Telescope, X } from 'lucide-react';
 import { ApiError, useProject } from '../../api';
 import { scoutSave, scoutSetStatus, useScout } from '../../api-extra';
 import type { ScoutCandidate, ScoutKind, ScoutList, ScoutRun } from '../../types-v3';
@@ -13,7 +14,7 @@ import { Button, Card, Disclosure, EmptyState, Meta, Modal, ProjectGlyph, Sectio
 import { ago, fmtDateTime, plural } from '../../util';
 import { SpinoffDialog } from '../project/SpinoffDialog';
 import { NewProjectDialog } from '../project/NewProjectDialog';
-import { TaskUndoToast } from '../tasks/TaskBits';
+import { Menu, TaskUndoToast } from '../tasks/TaskBits';
 import { friendly, offerUndo, useMedia } from '../tasks/model';
 import './ideas.css';
 
@@ -137,16 +138,11 @@ function Evidence({ items }: { items: string[] }) {
   );
 }
 
-function ScoutCard({ c, compact: compactIn, showSource, onMake }: { c: ScoutCandidate; compact: boolean; showSource: boolean; onMake: () => void }) {
+function ScoutCard({ c, compact, showSource, onMake }: { c: ScoutCandidate; compact: boolean; showSource: boolean; onMake: () => void }) {
   const { save, dismiss } = useScoutActions();
   const phone = useMedia();
-  const compact = compactIn || phone; // phones: evidence and first steps folded, so the section stays short
-  const [busy, setBusy] = useState<'save' | 'dismiss' | null>(null);
-  const run = async (k: 'save' | 'dismiss', fn: () => Promise<void>) => {
-    setBusy(k);
-    await fn();
-    setBusy(null);
-  };
+  const [menu, setMenu] = useState(false);
+  const moreRef = useRef<HTMLButtonElement>(null);
   const kind = SCOUT_KIND[c.kind] || SCOUT_KIND.idea;
   const source = c.registered ? (
     <Link to={`/projects/${c.projectId}`} className="scout-src" title={`Open ${c.projectName}`}>
@@ -159,59 +155,56 @@ function ScoutCard({ c, compact: compactIn, showSource, onMake }: { c: ScoutCand
       <span className="truncate">{c.projectName}</span>
     </span>
   );
-  const steps = c.firstSteps.length ? (
-    <ol className="scout-steps">
-      {c.firstSteps.map((s, i) => (
-        <li key={i}>{s}</li>
-      ))}
-    </ol>
-  ) : null;
+  const hasMore = !!c.why || c.evidence.length > 0 || c.firstSteps.length > 0;
   return (
-    <article className={`scout-card${compactIn ? ' compact' : ''}`} aria-label={`Possible project: ${c.title}`}>
-      <div className="scout-head">
-        <span className={`scout-kind k-${c.kind}`} title={kind.hint}>
-          {kind.label}
-        </span>
-        <Meta
-          className="scout-meta"
-          items={[showSource ? <>from {source}</> : null, c.confidence === 'low' ? <span className="scout-unsure" title="The scout found less evidence for this one">less sure</span> : null, <span title={`Spotted ${fmtDateTime(c.at)}`}>{ago(c.at)}</span>]}
-        />
-      </div>
+    <article className={`scout-card${compact ? ' compact' : ''}`} aria-label={`Possible project: ${c.title}`}>
       <h3 className="scout-title">{c.title}</h3>
-      {compact ? <Snippet text={c.pitch} lines={2} className="scout-pitch" /> : <p className="scout-pitch">{c.pitch}</p>}
-      {c.why && (compact ? <Snippet text={c.why} lines={2} className="scout-why" /> : <p className="scout-why">{c.why}</p>)}
-      {compact ? (
-        (c.evidence.length > 0 || steps) && (
-          <Disclosure summary={c.evidence.length ? `Evidence and first steps` : 'First steps'} className="scout-fold">
-            <Evidence items={c.evidence} />
-            {steps && (
-              <div className="scout-block">
-                <div className="scout-label">First steps</div>
-                {steps}
-              </div>
-            )}
-          </Disclosure>
-        )
-      ) : (
-        <>
+      <Snippet text={c.pitch} lines={2} className="scout-pitch" />
+      <Meta
+        className="scout-meta"
+        items={[
+          <span className={`scout-kind k-${c.kind}`} title={kind.hint}>
+            {kind.label}
+          </span>,
+          showSource ? source : null,
+          c.confidence === 'low' ? <span className="scout-unsure" title="The scout found less evidence for this one">less sure</span> : null,
+          <span title={`Spotted ${fmtDateTime(c.at)}`}>{ago(c.at)}</span>,
+        ]}
+      />
+      {hasMore && (
+        <Disclosure summary="Why, evidence and first steps" className="scout-fold">
+          {c.why && <p className="scout-why">{c.why}</p>}
           <Evidence items={c.evidence} />
-          {steps && (
-            <Disclosure summary={`First steps (${c.firstSteps.length})`} className="scout-fold">
-              {steps}
-            </Disclosure>
+          {c.firstSteps.length > 0 && (
+            <div className="scout-block">
+              <div className="scout-label">First steps</div>
+              <ol className="scout-steps">
+                {c.firstSteps.map((s, i) => (
+                  <li key={i}>{s}</li>
+                ))}
+              </ol>
+            </div>
           )}
-        </>
+        </Disclosure>
       )}
       <div className="scout-actions">
-        <Button size="sm" icon={phone ? <FolderPlus /> : undefined} onClick={onMake} title={c.kind === 'idea' ? 'Start a new project from it (you check everything first)' : `Spin it off from ${c.projectName} (you check everything first)`}>
+        <Button size="sm" icon={<FolderPlus />} onClick={onMake} title={c.kind === 'idea' ? 'Start a new project from it (you check everything first)' : `Spin it off from ${c.projectName} (you check everything first)`}>
           Make it a project
         </Button>
-        <Button size="sm" variant="ghost" icon={phone ? <Lightbulb /> : undefined} loading={busy === 'save'} onClick={() => run('save', () => save(c))} title="Save it to Your ideas for later">
-          Keep as idea
-        </Button>
-        <Button size="sm" variant="ghost" icon={phone ? <X /> : undefined} loading={busy === 'dismiss'} onClick={() => run('dismiss', () => dismiss(c))} title="Not a project: the scout won’t suggest it again">
-          Not a project
-        </Button>
+        <button ref={moreRef} type="button" className="btn sm ghost icon scout-menu-btn" aria-label="More: keep as idea, not a project" aria-haspopup="menu" aria-expanded={menu} title="Keep as idea, Not a project" onClick={() => setMenu(true)}>
+          <MoreHorizontal />
+        </button>
+        {menu && (
+          <Menu
+            anchor={moreRef.current}
+            title={c.title}
+            onClose={() => setMenu(false)}
+            items={[
+              { key: 'save', label: 'Keep as idea', icon: <Lightbulb />, sub: phone ? undefined : 'Saved to Your ideas for later', onSelect: () => save(c) },
+              { key: 'dismiss', label: 'Not a project', icon: <X />, sub: phone ? undefined : 'It won’t be suggested again', onSelect: () => dismiss(c) },
+            ]}
+          />
+        )}
       </div>
     </article>
   );

@@ -4,13 +4,13 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 're
 import { createPortal } from 'react-dom';
 import { Link, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Check, CheckCircle2, Cloud, CornerDownRight, ExternalLink, Monitor, MoreHorizontal, Play, RotateCcw, Smartphone, Sparkles, Sun, SunDim, Trash2, TriangleAlert, Undo2, X } from 'lucide-react';
+import { Bot, Check, CheckCircle2, Cloud, CornerDownRight, ExternalLink, Hourglass, Monitor, MoreHorizontal, Play, RotateCcw, Smartphone, Sparkles, Sun, SunDim, Trash2, TriangleAlert, Undo2, User, X } from 'lucide-react';
 import { api, useBootstrap, useProjects, useWsl } from '../../api';
 import { Button, CopyButton, IconButton, Meta, Modal, ProjectGlyph, SegmentedControl, Spinner, StatusIcon, Switch } from '../ui';
 import type { Launch, ProjectSummary } from '../../types';
 import type { WorkItem, WorkStatus } from '../../types-extra';
 import { ago, fmtDate, fmtDateTime, isPhone } from '../../util';
-import { aiHint, dateInputToMs, dateInputValue, dismissUndo, dueInfo, isPlannedToday, PRIORITIES, runUndo, TASK_STATUS, useMedia, useTaskActions, useUndoSlot } from './model';
+import { aiHint, dateInputToMs, dateInputValue, dismissUndo, dueInfo, isAutoClosed, isPlannedToday, PRIORITIES, runUndo, TASK_STATUS, useMedia, useTaskActions, useUndoSlot, WHO_LABEL } from './model';
 import './tasks.css';
 
 // ---------------------------------------------------------------- small bits
@@ -43,6 +43,18 @@ export function AiTag({ iconOnly = false }: { iconOnly?: boolean }) {
     <span className="task-ai" title="Found by Pilotage in your sessions" aria-label={iconOnly ? 'From AI' : undefined}>
       <Sparkles />
       {!iconOnly && 'AI'}
+    </span>
+  );
+}
+
+/** Who does it (the AI's guess): "You" / "Claude" / "Waiting", a quiet marker in the meta line. */
+export function WhoTag({ who }: { who?: WorkItem['who'] }) {
+  if (!who || !WHO_LABEL[who]) return null;
+  const Icon = who === 'you' ? User : who === 'claude' ? Bot : Hourglass;
+  return (
+    <span className={`task-who ${who}`} title={WHO_LABEL[who].hint}>
+      <Icon aria-hidden="true" />
+      {WHO_LABEL[who].label}
     </span>
   );
 }
@@ -113,6 +125,7 @@ export function TaskMeta({
   showSource = false,
   compact = false,
   noTime = false,
+  who = false,
 }: {
   it: Partial<WorkItem> & Pick<WorkItem, 'projectName' | 'ai' | 'sourceAt'>;
   project?: ProjLite;
@@ -120,6 +133,8 @@ export function TaskMeta({
   showSource?: boolean;
   compact?: boolean;
   noTime?: boolean;
+  /** show the You / Claude marker instead of the AI tag (Tasks page) */
+  who?: boolean;
 }) {
   const due = dueInfo(it.dueAt);
   const ws = it.workspace ?? project?.workspace ?? null;
@@ -132,7 +147,7 @@ export function TaskMeta({
             <span className="truncate">{it.projectName}</span>
           </span>
         ) : null,
-        it.ai ? <AiTag iconOnly={compact} /> : null,
+        who ? (it.who ? <WhoTag who={it.who} /> : null) : it.ai ? <AiTag iconOnly={compact} /> : null,
         due ? (
           <span className={due.warn ? 'tone-amber' : ''} title={due.title}>
             {due.label}
@@ -480,7 +495,7 @@ export function TaskCard({
       aria-label={`${it.title}. ${TASK_STATUS[it.status].label}. Open`}
     >
       <div className="task-card-head">
-        <span className="t clamp-3">{it.title}</span>
+        <span className="t clamp-2">{it.title}</span>
         <PriorityIcon p={it.priority} />
       </div>
       {isPlannedToday(it) && (
@@ -489,7 +504,7 @@ export function TaskCard({
         </div>
       )}
       <div className={`task-card-meta${menu ? ' menu-open' : ''}`}>
-        <TaskMeta it={it} project={project} showProject={showProject} compact noTime />
+        <TaskMeta it={it} project={project} showProject={showProject} compact noTime who />
         {!it.dueAt && (
           <span className="task-when" title={taskWhen(it).title}>
             {taskWhen(it, true).text}
@@ -515,17 +530,7 @@ export function TaskCard({
           {menu && <Menu anchor={moreRef.current} title="Move to" items={[...statusMenuItems(it.status, (s) => setStatus(it.id, s)), ...(todayItem ? [todayItem] : [])]} onClose={() => setMenu(false)} />}
         </div>
       </div>
-      {it.source.kind === 'ai' && <SourceLine it={it} />}
       <AiHintLine it={it} />
-      {it.status === 'done' && it.closedBy === 'ai' && (
-        <div className="ai-hint muted-hint above" onClick={(e) => e.stopPropagation()}>
-          <Sparkles />
-          <span>Closed automatically</span>
-          <button type="button" className="ai-hint-btn" onClick={() => setStatus(it.id, 'todo')}>
-            Restore
-          </button>
-        </div>
-      )}
     </div>
   );
 }
@@ -756,8 +761,8 @@ export function TaskSheet({ it, onClose }: { it: WorkItem; onClose: () => void }
             if (await remove(it.id)) onClose();
           }}
         />
-        {it.status === 'dropped' ? (
-          <Button variant="ghost" size="sm" icon={<RotateCcw />} onClick={() => setStatus(it.id, 'todo')}>
+        {it.status === 'dropped' || isAutoClosed(it) ? (
+          <Button variant="ghost" size="sm" icon={<RotateCcw />} onClick={() => setStatus(it.id, 'todo')} title="Back to To do">
             Restore
           </Button>
         ) : (
@@ -865,19 +870,23 @@ export function TaskSheet({ it, onClose }: { it: WorkItem; onClose: () => void }
                 <ProjectSelect value={it.projectId} projects={projList} onChange={(id) => id && id !== it.projectId && patch(it.id, { projectId: id }, 'Moved')} label="Project" />
               </div>
             </div>
-            <AutoText
-              className="textarea task-detail-edit"
-              value={it.detail}
-              label="Details"
-              placeholder="Add details, links, acceptance criteria…"
-              minRows={3}
-              onCommit={(v) => patch(it.id, { detail: v })}
-            />
+            <div className="task-detail-wrap">
+              {it.ai && !!it.detail && <span className="task-detail-cap">The full step · sent to Claude when you start a session</span>}
+              <AutoText
+                className="textarea task-detail-edit"
+                value={it.detail}
+                label="Details"
+                placeholder="Add details, links, acceptance criteria…"
+                minRows={3}
+                onCommit={(v) => patch(it.id, { detail: v })}
+              />
+            </div>
             {hint && <AiHintLine it={it} />}
             <div className="task-sheet-src">
               <Meta
                 items={[
                   it.ai ? <AiTag /> : <span>Added by you</span>,
+                  it.who ? <WhoTag who={it.who} /> : null,
                   it.source.kind === 'ai' && it.source.sessionId ? (
                     it.source.sessionTitle ? (
                       <Link to={`/sessions/${it.source.sessionId}`} onClick={onClose} className="link">
@@ -890,7 +899,7 @@ export function TaskSheet({ it, onClose }: { it: WorkItem; onClose: () => void }
                     <SourceLine it={it} link={false} />
                   ) : null,
                   <span title={fmtDateTime(it.createdAt)}>created {fmtDate(it.createdAt)}</span>,
-                  it.closedBy === 'ai' && closed ? <span>closed automatically</span> : null,
+                  isAutoClosed(it) ? <span>{it.closedBy === 'expired' ? 'expired' : 'closed automatically'}</span> : null,
                   it.launches.length ? <span>{it.launches.length === 1 ? 'started once' : `started ${it.launches.length} times`}</span> : null,
                 ]}
               />

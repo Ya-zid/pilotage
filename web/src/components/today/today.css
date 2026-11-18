@@ -34,97 +34,140 @@
   box-shadow: inset 0 0 0 1px var(--border-strong);
 }
 
-/* ---------------------------------------------------------------- header */
-.home-head .ph-sub {
-  margin-top: 8px;
+/* ---------------------------------------------------------------- header + pulse tiles */
+.pulse {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
 }
-.home-headline {
-  margin: 0;
-  font-size: var(--fs-md);
-  line-height: 1.55;
-  color: var(--text-2);
-  text-wrap: pretty;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
-  overflow: hidden;
+.pulse-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 14px 16px 13px;
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--card-shadow);
+  color: var(--text);
+  text-decoration: none;
+  transition: border-color var(--dur-1), background var(--dur-1);
 }
-.home-updated {
+a.pulse-tile:hover {
+  border-color: var(--border-strong);
+}
+.pt-label {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 2px 7px;
-  margin-top: 8px;
+  gap: 7px;
+  min-width: 0;
   font-size: var(--fs-xs);
+  font-weight: 550;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.pt-label > svg {
+  flex: none;
+}
+.pt-ring {
   color: var(--text-3);
 }
-.home-refresh {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  border: 0;
-  background: none;
-  padding: 4px 4px;
-  margin: -4px -4px;
-  border-radius: var(--r-sm);
-  font: inherit;
-  font-weight: 500;
+.pt-value {
+  font-size: 24px;
+  font-weight: 650;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+.pt-of {
+  font-size: 0.7em;
+  font-weight: 550;
+  color: var(--text-3);
+  letter-spacing: 0;
+}
+/* a tile only takes its color when its number is not zero */
+.pulse-tile.t-accent .pt-label {
   color: var(--accent-text);
-  cursor: pointer;
 }
-.home-refresh:hover:not(:disabled) {
-  text-decoration: underline;
-  text-underline-offset: 2px;
+.pulse-tile.t-amber {
+  border-color: color-mix(in srgb, var(--amber) 40%, var(--border));
+  background: color-mix(in srgb, var(--amber) 7%, var(--surface));
 }
-.home-refresh:disabled {
-  color: var(--text-3);
-  cursor: default;
+.pulse-tile.t-amber .pt-label,
+.pulse-tile.t-amber .pt-value {
+  color: var(--amber);
 }
 
 /* ---------------------------------------------------------------- shared row bits */
 .home-card {
   overflow: hidden;
 }
-.home-proj {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  min-width: 0;
-  max-width: 220px;
-}
-.home-proj .glyph {
-  flex: none;
-}
 .home-row .lrow-title > .t {
   flex: 0 1 auto;
 }
 .home-empty {
-  padding: 14px 18px;
-  border: 1px dashed var(--border-strong);
-  border-radius: var(--r-lg);
+  margin: 0;
+  padding: 0 2px;
   font-size: var(--fs-sm);
-  color: var(--text-2);
-  line-height: 1.5;
+  color: var(--text-3);
+}
+.home-more {
+  align-items: center;
+  justify-content: flex-start;
+  gap: 4px;
+  padding-left: 56px;
+  min-height: 40px;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  color: var(--text-3);
+  text-decoration: none;
+}
+.home-more:hover {
+  color: var(--text);
+}
+.home-more > svg {
+  width: 14px;
+  height: 14px;
 }
 
 /* ---------------------------------------------------------------- needs you (amber) */
 .needs-card {
+  --badge-bg: color-mix(in srgb, var(--amber) 5%, var(--surface));
   border-color: color-mix(in srgb, var(--amber) 40%, var(--border));
-  background: color-mix(in srgb, var(--amber) 4%, var(--surface));
+  background: var(--badge-bg);
 }
-.needs-row > .lrow-body {
-  gap: 4px;
+.needs-open > svg {
+  color: var(--amber);
 }
 .needs-q {
-  font-size: var(--fs-sm);
-  line-height: 1.5;
-  color: var(--text);
+  color: var(--text-2);
 }
-.needs-action {
-  flex: none;
-  align-self: center;
-  position: relative;
-  z-index: 1;
+
+/* ---------------------------------------------------------------- running: one line per session on PC */
+.run-row {
+  align-items: center;
+  padding-top: 11px;
+  padding-bottom: 11px;
+}
+.run-row .lrow-lead > .glyph-wrap {
+  margin-top: 0;
+}
+@media (min-width: 861px) {
+  .run-body {
+    flex-direction: row;
+    align-items: center;
+    gap: 14px;
+  }
+  .run-body > .lrow-title {
+    flex: 0 1 auto;
+    max-width: 62%;
+  }
+  .run-body > .meta {
+    flex: 1 1 0;
+    justify-content: flex-end;
+  }
 }
 
 /* ---------------------------------------------------------------- today */
@@ -133,9 +176,6 @@
 }
 .home-task + .home-task {
   border-top: 1px solid var(--border);
-}
-.home-task > .lrow {
-  padding-right: 56px;
 }
 /* every row here is planned for today: the task rows' "Today" tag would only repeat the heading */
 .home-today .task-today {
@@ -146,264 +186,76 @@
 }
 .home-unplan {
   position: absolute;
-  z-index: 1;
-  right: 14px;
+  right: 12px;
   top: 50%;
   transform: translateY(-50%);
 }
-.home-unplan:active {
-  transform: translateY(-50%);
-}
-.home-none {
-  margin: 0;
-  padding-left: 2px;
-  font-size: var(--fs-sm);
-  color: var(--text-3);
-}
-.home-props {
+.suggest {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
-.home-props-label {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding-left: 2px;
-  font-size: var(--fs-xs);
-  font-weight: 500;
-  color: var(--text-3);
-}
-.home-props-label > svg {
-  width: 13px;
-  height: 13px;
-}
-/* proposals aren't commitments yet: a dashed frame, no fill */
-.prop-card {
-  border-style: dashed;
-  border-color: var(--border-strong);
-  background: transparent;
-  box-shadow: none;
-}
-.prop-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 14px;
-  padding: 14px 16px 14px 20px;
-  min-width: 0;
-}
-.prop-row + .prop-row {
-  border-top: 1px dashed var(--border-strong);
-}
-.prop-row > .glyph {
-  flex: none;
-  margin-top: 1px;
-}
-.prop-body {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-.prop-title {
-  font-weight: 600;
-  font-size: var(--fs-base);
-  line-height: 1.45;
-  color: var(--text);
-}
-.prop-why {
-  font-size: var(--fs-sm);
-  line-height: 1.5;
-  color: var(--text-2);
-}
-.prop-foot {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  gap: 8px 12px;
-  margin-top: 6px;
-  min-width: 0;
-}
-.prop-foot > .meta {
-  flex: 1 1 140px;
-}
-.prop-foot .home-proj .glyph {
-  display: none; /* the row already leads with the project glyph */
-}
-.prop-actions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex: none;
-  margin-left: auto;
-}
-
-/* ---------------------------------------------------------------- working (one line per session) */
-.home-row.dense {
-  padding: 10px 20px;
-}
-.work-row {
-  align-items: center;
-}
-.work-line {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-.work-t {
-  flex: 0 1 auto;
-  max-width: 55%;
-  min-width: 0;
+.suggest-toggle {
+  align-self: flex-start;
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  font-weight: 550;
-  font-size: var(--fs-base);
-  line-height: 1.5;
-  color: var(--text);
-}
-.work-meta {
-  flex: 1 1 0;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: var(--fs-xs);
-  color: var(--text-3);
-  white-space: nowrap;
-  overflow: hidden;
-}
-.work-meta .home-proj {
-  flex: 0 1 auto;
-  max-width: 45%;
-}
-.work-dot {
-  flex: none;
-  color: var(--text-4);
-}
-.work-detail {
-  flex: 1 1 0;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.work-ago {
-  flex: none;
-  font-size: var(--fs-xs);
-  color: var(--text-3);
-}
-.home-more {
-  justify-content: center;
-  gap: 6px;
-  font-size: var(--fs-sm);
-  color: var(--text-2);
-  text-decoration: none;
-}
-.home-more > svg {
-  width: 14px;
-  height: 14px;
-}
-.home-idle {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
   min-height: 32px;
-  padding: 0 4px;
-  font-size: var(--fs-sm);
-  color: var(--text-3);
-  text-decoration: none;
+  padding: 0 10px 0 8px;
+  margin-left: -8px;
+  border: 0;
   border-radius: var(--r-md);
-}
-.home-idle:hover {
-  color: var(--text-2);
-}
-.home-idle-go {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  color: var(--text-2);
+  background: none;
+  font-size: var(--fs-sm);
   font-weight: 500;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: background var(--dur-1), color var(--dur-1);
 }
-.home-idle-go > svg {
-  width: 14px;
-  height: 14px;
-}
-.home-idle:hover .home-idle-go {
+.suggest-toggle:hover {
+  background: var(--hover);
   color: var(--text);
+}
+.suggest-toggle > .suggest-ico {
+  width: 15px;
+  height: 15px;
+  color: var(--accent);
+}
+.suggest-toggle > .chev {
+  width: 15px;
+  height: 15px;
+  color: var(--text-3);
+  transition: transform var(--dur-2) var(--ease);
+}
+.suggest.open .suggest-toggle > .chev {
+  transform: rotate(90deg);
+}
+.sug-row {
+  align-items: center;
+}
+.sug-row.open {
+  align-items: flex-start;
+}
+.sug-row.open .lrow-title > .t {
+  white-space: normal;
+}
+.sug-row.open > .row-acts {
+  align-self: flex-start;
+}
+.sug-why {
+  margin: 2px 0 4px;
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  color: var(--text-2);
+  max-width: 62ch;
 }
 
 /* ---------------------------------------------------------------- pick up */
-.pick-row > .lrow-body {
-  gap: 3px;
-}
-.pick-line {
-  display: flex;
-  align-items: flex-start;
-  gap: 7px;
-  min-width: 0;
-  font-size: var(--fs-sm);
-  line-height: 1.5;
-  color: var(--text-2);
-}
-.pick-line > div {
-  min-width: 0;
-}
-.pick-line > svg {
-  flex: none;
-  width: 13px;
-  height: 13px;
-  margin-top: 3px;
-  color: var(--accent);
-}
-.pick-line.is-next {
-  color: var(--text);
+.pick-row {
+  align-items: center;
 }
 .pick-resume {
   color: var(--text);
-}
-.pick-actions {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  align-self: center;
-  position: relative;
-  z-index: 1;
-}
-.quiet-tag {
-  display: inline-flex;
-  align-items: center;
-  height: 18px;
-  padding: 0 7px;
-  border-radius: 999px;
-  background: var(--surface-2);
-  box-shadow: inset 0 0 0 1px var(--border);
-  color: var(--text-2);
-  font-weight: 500;
-  white-space: nowrap;
-}
-
-/* ---------------------------------------------------------------- footer */
-.home-foot {
-  padding-top: 2px;
-}
-.home-foot .meta {
-  font-size: var(--fs-sm);
-}
-.home-foot-link {
-  color: var(--text-2);
-  text-decoration: none;
-}
-.home-foot-link:hover {
-  color: var(--text);
-  text-decoration: underline;
-  text-underline-offset: 2px;
 }
 
 /* ---------------------------------------------------------------- phone */
@@ -418,102 +270,70 @@
   .catchup-extra {
     display: none;
   }
-  .home-refresh {
-    padding: 11px 8px;
-    margin: -11px -8px;
+  /* four compact tiles in one row */
+  .pulse {
+    gap: 8px;
   }
-  .home-row.dense {
-    padding: 10px 16px;
+  .pulse-tile {
+    gap: 4px;
+    padding: 10px 10px 9px;
+    border-radius: var(--r-md);
   }
-  /* Needs you: the one row type with a full-width "Open in Claude app" */
-  .needs-row {
-    flex-wrap: wrap;
-    align-items: flex-start;
-    row-gap: 10px;
+  .pt-label {
+    gap: 5px;
+    font-size: 11.5px;
   }
-  .needs-row > .lrow-body {
-    flex: 1 1 calc(100% - 40px);
-  }
-  .needs-action {
-    flex: 1 1 100%;
-    padding-left: 32px;
-  }
-  .needs-action .needs-open {
-    width: 100%;
-    height: 44px;
-    min-height: 44px;
-    font-size: 14px;
-  }
-  .home-task > .lrow {
-    padding-right: 60px;
-  }
-  .home-unplan {
-    right: 10px;
-  }
-  .home-headline {
-    -webkit-line-clamp: 4;
-  }
-  /* proposals: the project glyph moves into the meta line so the three buttons fit on one row */
-  .prop-row {
-    padding: 14px 16px;
-  }
-  .prop-row > .glyph {
+  .pt-label > svg {
     display: none;
   }
-  .prop-foot .home-proj .glyph {
-    display: inline-grid;
+  .pt-value {
+    font-size: 20px;
   }
-  .prop-actions {
-    width: 100%;
-    margin-left: 0;
-    gap: 6px;
+  .home-row.lrow {
+    padding: 12px 8px 12px 16px;
   }
-  .prop-actions > .btn {
+  .home-row.run-row {
+    padding-right: 4px;
+  }
+  .home-more {
+    padding-left: 52px;
+    min-height: 44px;
+  }
+  .home-unplan {
+    display: none;
+  }
+  .sug-row .row-acts .btn.sm {
     padding: 0 11px;
   }
-  .prop-actions > .btn:first-child {
-    flex: 1 1 auto;
+  /* suggestions: titles may take two lines; an opened one puts its actions under the text */
+  .sug-row .lrow-title > .t {
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
   }
-  /* Working: title on one line, project + detail under it */
-  .work-line {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 1px;
+  .sug-row.open .lrow-title > .t {
+    display: block;
   }
-  .work-t {
-    max-width: 100%;
+  .sug-row.open {
+    flex-wrap: wrap;
+    row-gap: 6px;
   }
-  .work-meta {
-    flex: none;
+  .sug-row.open > .lrow-body {
+    flex: 1 1 calc(100% - 40px);
   }
-  .work-row > .work-ago {
-    align-self: flex-start;
-    margin-top: 2px;
+  .sug-row.open > .row-acts {
+    margin-left: 36px;
   }
-  .home-idle {
-    min-height: 40px;
+}
+@media (max-width: 380px) {
+  .pulse {
+    gap: 6px;
   }
-  .pick-row {
-    padding-top: 11px;
-    padding-bottom: 11px;
-    padding-right: 8px;
+  .pulse-tile {
+    padding: 10px 8px 9px;
   }
-  .pick-row > .lrow-body {
-    gap: 2px;
-  }
-  .quiet-tag {
-    height: 17px;
-  }
-  .pick-actions {
-    align-self: flex-start;
-    margin-top: -8px;
-  }
-  .home-foot .meta {
-    row-gap: 0;
-  }
-  .home-foot-link {
-    display: inline-flex;
-    align-items: center;
-    min-height: 40px;
+  .pt-label {
+    font-size: var(--fs-2xs);
   }
 }

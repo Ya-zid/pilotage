@@ -1,0 +1,57 @@
+/* New session dialog (components/NewSession.tsx). Tokens from styles.css only.
+   Visible: the project (or the resumed session), the message, the trust checkbox; the rest behind "Options". */
+.ns-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.focus-card.ns-project {
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+}
+.focus-card.ns-resume {
+  gap: 8px;
+}
+.textarea.ns-prompt {
+  min-height: 108px;
+}
+.disclosure.ns-options {
+  border-top: 1px solid var(--border);
+  padding-top: 6px;
+}
+.disclosure.ns-options > summary {
+  min-height: 40px;
+  min-width: 0;
+}
+.ns-options-sum {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+.ns-options-h {
+  flex: none;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text);
+}
+.ns-options-line {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  font-weight: 400;
+}
+.disclosure.ns-options > .disclosure-body {
+  padding: 8px 0 2px;
+}
+.ns-options-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+@media (max-width: 860px) {
+  .disclosure.ns-options > summary {
+    min-height: 44px;
+  }
+}

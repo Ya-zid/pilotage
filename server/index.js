@@ -21,6 +21,8 @@ import { AIEngine } from './ai/engine.js';
 import { usageNow } from './ai/usage.js';
 import { Views } from './views.js';
 import { launch, getLaunch, listLaunches, attachTerminal, stopBackground, openVSCode, openExplorer, openShell, openUrlOnPC, sanitizeName } from './launch.js';
+import { trustState, trustFolder } from './claude-trust.js';
+import { tilde as tildePath } from './work/spinoff.js';
 import { windowsAddresses, forwarderStatus, ensureForwarder, enablePhoneAccess, stopForwarder, phoneAccessStatus, firewallRuleExists, setTrustedSsid, phoneAddresses, phoneUrls, lanConnectionAllowed, lanAllowList, LAN_BIND, LAN_MODE } from './net.js';
 import { ensureTls, tlsStatus, caCertDer, noteHandshakeFailure } from './tls.js';
 import { log, clip, randomToken, isInside, hash } from './util.js';
@@ -407,32 +409,66 @@ route('GET', '/api/live', async (req, res) => {
   json(res, { live: views.listSessions({ liveOnly: true, limit: 100 }), launches: listLaunches(), gen });
 });
 
-route('POST', '/api/launch', async (req, res, { body, dev }) => {
+/** The folder a launch runs in: {cwd, projectName, meta} or {status, error}. Only known projects and worktrees. */
+function launchTarget({ projectId, worktree, resumeId }) {
   let cwd = null;
   let projectName = '';
-  if (body.projectId) {
-    const p = registry.byId(body.projectId);
-    if (!p) return fail(res, 404, 'Project not found');
+  let meta = null;
+  if (projectId) {
+    const p = registry.byId(projectId);
+    if (!p) return { status: 404, error: 'Project not found' };
     cwd = p.path;
     projectName = store.project(p.path).name || p.name;
-    if (body.worktree) {
-      const w = p.worktrees.get(body.worktree);
-      if (!w) return fail(res, 400, 'Unknown worktree');
+    if (worktree) {
+      const w = p.worktrees.get(worktree);
+      if (!w) return { status: 400, error: 'Unknown worktree' };
       cwd = w.path;
     }
   }
-  if (body.resumeId) {
-    const meta = index.get(body.resumeId);
-    if (!meta) return fail(res, 404, 'Session not found');
-    if (live.get(body.resumeId)?.live && !body.fork) return fail(res, 409, 'This session is already running. Open it instead, or fork it.');
+  if (resumeId) {
+    meta = index.get(resumeId);
+    if (!meta) return { status: 404, error: 'Session not found' };
     cwd = cwd || meta.cwd;
     const pj = registry.projectOfSession(meta);
     projectName = projectName || (pj ? store.project(pj.path).name || pj.name : '');
-    if (!body.name) body.name = views.sessionTitle(meta, null);
   }
-  if (!cwd) return fail(res, 400, 'Pick a project');
+  if (!cwd) return { status: 400, error: 'Pick a project' };
   const known = [...registry.projects.values()].some((p) => isInside(cwd, p.path) || [...p.worktrees.keys()].some((w) => isInside(cwd, w)));
-  if (!known) return fail(res, 400, 'Folder is not a known project');
+  if (!known) return { status: 400, error: 'Folder is not a known project' };
+  return { cwd, projectName, meta };
+}
+
+// Claude Code's "trust this folder?" question for a launch target (see claude-trust.js).
+route('GET', '/api/trust', async (req, res, { url }) => {
+  const q = url.searchParams;
+  const t = launchTarget({ projectId: q.get('projectId'), worktree: q.get('worktree'), resumeId: q.get('resumeId') });
+  if (t.error) return fail(res, t.status, t.error);
+  const s = trustState(t.cwd);
+  json(res, { trusted: s.trusted, home: s.home, via: s.via ? tildePath(s.via) : null, auto: !!store.settings.launch.trustFolders });
+});
+
+/** Record Claude Code trust for `cwd` when asked (checkbox) or when the setting is on. Never blocks a launch. */
+async function trustBeforeLaunch(cwd, asked, why) {
+  if (!asked && !store.settings.launch.trustFolders) return;
+  try {
+    if (trustState(cwd).trusted) return;
+    const r = await trustFolder(cwd);
+    if (r.changed) log.info(`trust: marked ${tildePath(cwd)} as trusted in Claude Code (${why})`);
+  } catch (e) {
+    log.warn(`trust: could not mark ${tildePath(cwd)} as trusted: ${e.message}`);
+  }
+}
+
+route('POST', '/api/launch', async (req, res, { body, dev }) => {
+  const t = launchTarget(body);
+  if (t.error) return fail(res, t.status, t.error);
+  const { cwd, projectName } = t;
+  if (body.resumeId) {
+    if (live.get(body.resumeId)?.live && !body.fork) return fail(res, 409, 'This session is already running. Open it instead, or fork it.');
+    if (!body.name) body.name = views.sessionTitle(t.meta, null);
+  }
+  const harnessIn = typeof body.harness === 'string' ? body.harness : 'claude';
+  if (harnessIn === 'claude') await trustBeforeLaunch(cwd, body.trust === true, body.trust === true ? `asked from ${dev.name}` : 'setting');
   const isPhone = isPhoneUA(req.headers['user-agent']);
   const mode = body.mode === 'terminal' || body.mode === 'background' ? body.mode : isPhone ? store.settings.launch.phoneMode : store.settings.launch.pcMode;
   const rec = await launch({
@@ -627,6 +663,7 @@ route('PATCH', '/api/settings', async (req, res, { body }) => {
     if (['', 'opus', 'sonnet', 'haiku', 'fable'].includes(s.launch.model)) clean.launch.model = s.launch.model;
     if (['terminal', 'background'].includes(s.launch.pcMode)) clean.launch.pcMode = s.launch.pcMode;
     if (['terminal', 'background'].includes(s.launch.phoneMode)) clean.launch.phoneMode = s.launch.phoneMode;
+    if (typeof s.launch.trustFolders === 'boolean') clean.launch.trustFolders = s.launch.trustFolders;
   }
   if (s.scan) {
     clean.scan = {};

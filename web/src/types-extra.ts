@@ -29,7 +29,9 @@ export interface WorkItem {
   autoManaged: boolean;       // the extractor may still move it (ai && !userEdited)
   userEdited: boolean;        // any PATCH sets this; from then on the AI never changes status/title/detail
   aiStatus: AiStatus;
-  closedBy: 'ai' | 'user' | 'expired' | null;
+  closedBy: 'ai' | 'user' | 'expired' | null; // 'ai' / 'expired' = closed automatically (restorable)
+  who?: 'you' | 'claude' | 'waiting' | null; // who does it, as the AI sees it (null = unknown)
+  titleBy?: 'short' | null;   // 'short' = shortened by the one-time cleanup
   plannedFor?: string | null;   // 'YYYY-MM-DD': flagged for Home › Today (rolls over until done)
   snoozeUntil?: number | null;  // Suggested: hidden until then
   dismissReason?: 'not-a-task' | 'done' | 'duplicate' | 'old' | null;

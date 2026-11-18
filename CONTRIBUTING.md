@@ -157,7 +157,8 @@ phone width (about 390 px): the phone is a first-class layout ([docs/DESIGN.md](
 ## Ground rules
 
 - **Read-only toward the user's projects and agent folders** (`~/.claude`, `~/.codex`, `~/.gemini`). Pilotage never
-  writes there. Every git call uses `--no-optional-locks`.
+  writes there. The single, opt-in exception is `server/claude-trust.js` (Claude Code's folder-trust flag in
+  `~/.claude.json`); don't add others. Every git call uses `--no-optional-locks`.
 - **Security stays tight**: every `/api` route needs a paired device or the CLI key; mutating routes need
   `X-Pilotage: 1` + JSON; keep the Host allow-list and the 127.0.0.1 bind. See [SECURITY.md](SECURITY.md).
 - **Launch inputs are checked**: the folder must be a known project or worktree, names go through `sanitizeName()`,

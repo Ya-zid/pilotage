@@ -1,13 +1,17 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { CheckCircle2, Cloud, ExternalLink, GitFork, Monitor, Search, Smartphone, TriangleAlert } from 'lucide-react';
+import { CheckCircle2, Cloud, ExternalLink, GitFork, Monitor, Search, ShieldCheck, Smartphone, TriangleAlert } from 'lucide-react';
 import { useHarnesses } from '../api-extra';
 import { api, useBootstrap, useInvalidate, useProjects, useSession, useWsl } from '../api';
 import { useApp } from './AppContext';
-import { Modal, Spinner, useToast, CopyButton, ProjectGlyph, SegmentedControl, Field } from './ui';
+import { Disclosure, Modal, Spinner, useToast, CopyButton, ProjectGlyph, SegmentedControl, Field } from './ui';
+import './NewSession.css';
 import type { Launch } from '../types';
 import { ago, isPhone } from '../util';
+
+const AGENT_LABEL: Record<string, string> = { claude: 'Claude Code', codex: 'Codex', gemini: 'Gemini' };
+const PERM_LABEL: Record<string, string> = { bypassPermissions: 'Skip all prompts', default: 'Ask before acting', acceptEdits: 'Auto-accept edits', plan: 'Plan first' };
 
 const MODELS = [
   { value: '', label: 'Default' },
@@ -117,22 +121,45 @@ export function NewSessionModal() {
   }, [claudeOnly]);
   const [busy, setBusy] = useState(false);
   const [launch, setLaunch] = useState<Launch | null>(null);
+  // Claude Code asks "trust this folder?" once per folder, at the PC. Offer to answer it from here.
+  const trustTarget = claudeOnly && (projectId || pre?.resumeId) ? { projectId: projectId || '', worktree: pre?.worktree || '', resumeId: pre?.resumeId || '' } : null;
+  const { data: trust } = useQuery({
+    queryKey: ['trust', trustTarget],
+    queryFn: () => api<{ trusted: boolean; home: boolean; auto: boolean }>(`/api/trust?${new URLSearchParams(trustTarget!)}`),
+    enabled: !!trustTarget,
+    staleTime: 10_000,
+  });
+  const askTrust = !!trust && !trust.trusted && !trust.home && !trust.auto;
+  const [trustTick, setTrustTick] = useState(phone);
 
   const resuming = !!pre?.resumeId;
   const project = projects?.find((p) => p.id === (projectId || resumeSession?.projectId));
+  // Most recently active first.
   const list = useMemo(() => {
-    const ps = (projects || []).filter((p) => p.status !== 'archived');
+    const ps = (projects || []).filter((p) => p.status !== 'archived').sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0));
     const f = filter.toLowerCase();
     const filtered = f ? ps.filter((p) => `${p.name} ${p.displayPath} ${p.workspaceName}`.toLowerCase().includes(f)) : ps;
     return filtered.slice(0, f ? 30 : 10);
   }, [projects, filter]);
+  const agents = (harnesses?.harnesses || []).filter((h) => h.installed && h.enabled && (wsl || h.id === 'claude'));
+  // One line that says what Options holds right now ("Terminal · Default model · Skip all prompts").
+  const perm = boot?.settings.launch.permissionMode;
+  const optionsLine = [
+    !claudeOnly ? AGENT_LABEL[effHarness] : '',
+    claudeOnly ? (mode === 'background' ? 'Background' : 'Terminal') : 'Terminal',
+    claudeOnly ? (model ? MODELS.find((m) => m.value === model)?.label || model : 'Default model') : '',
+    claudeOnly && perm ? PERM_LABEL[perm] || perm : '',
+    name.trim() ? `“${name.trim()}”` : '',
+  ]
+    .filter(Boolean)
+    .join(' · ');
 
   async function start() {
     setBusy(true);
     try {
       const rec = await api<Launch>('/api/launch', {
         method: 'POST',
-        body: { projectId: projectId || undefined, worktree: pre?.worktree, resumeId: pre?.resumeId, fork: claudeOnly && fork, name: name || undefined, prompt, mode: claudeOnly ? mode : 'terminal', model: claudeOnly ? model : '', harness: effHarness, ideaId: pre?.ideaId },
+        body: { projectId: projectId || undefined, worktree: pre?.worktree, resumeId: pre?.resumeId, fork: claudeOnly && fork, trust: askTrust && trustTick, name: name || undefined, prompt, mode: claudeOnly ? mode : 'terminal', model: claudeOnly ? model : '', harness: effHarness, ideaId: pre?.ideaId },
       });
       setLaunch(rec);
       inv('live', 'overview', 'ideas');
@@ -169,16 +196,15 @@ export function NewSessionModal() {
       {launch ? (
         <LaunchProgress launch={launch} onClose={closeNewSession} />
       ) : (
-        <div className="modal-body">
+        <div className="modal-body ns-body">
           {resuming ? (
-            <div className="focus-card">
-              <div className="overline">{fork ? 'Starts a new session from this conversation' : 'Continues this conversation'}</div>
-              <div className="row" style={{ gap: 10, alignItems: 'flex-start' }}>
-                {resumeSession?.projectName && <ProjectGlyph name={resumeSession.projectName} ws={resumeSession.workspace} size={28} />}
-                <div className="grow">
-                  <div className="bold">{resumeSession?.title || '…'}</div>
-                  <div className="small faint">
-                    {resumeSession?.projectName} · last active {ago(resumeSession?.lastAt)}
+            <div className="focus-card ns-resume">
+              <div className="row" style={{ gap: 12, alignItems: 'center' }}>
+                {resumeSession?.projectName && <ProjectGlyph name={resumeSession.projectName} ws={resumeSession.workspace} size={32} />}
+                <div className="grow" style={{ minWidth: 0 }}>
+                  <div className="bold truncate">{resumeSession?.title || '…'}</div>
+                  <div className="tiny faint truncate">
+                    {[resumeSession?.projectName, resumeSession ? `last active ${ago(resumeSession.lastAt)}` : ''].filter(Boolean).join(' · ')}
                   </div>
                 </div>
               </div>
@@ -189,88 +215,110 @@ export function NewSessionModal() {
                 </label>
               )}
             </div>
-          ) : (
-            <div className="field">
-              <label>Project</label>
-              {project && projectId ? (
-                <div className="focus-card" style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-                  <ProjectGlyph name={project.name} ws={project.workspace} color={project.color} size={32} />
-                  <div className="grow">
-                    <div className="bold truncate">{project.name}</div>
-                    <div className="tiny faint truncate">{pre?.worktree ? `worktree ${pre.worktree.split('/').pop()}` : project.displayPath}</div>
-                  </div>
-                  <button className="btn sm ghost" onClick={() => setProjectId('')}>
-                    Change
-                  </button>
-                </div>
-              ) : (
-                <div className="picker">
-                  <div className="picker-search">
-                    <Search size={15} />
-                    <input placeholder="Search projects…" value={filter} onChange={(e) => setFilter(e.target.value)} autoFocus={!phone} />
-                  </div>
-                  <div className="picker-list">
-                    {list.map((p) => (
-                      <button type="button" key={p.id} className="picker-item" onClick={() => setProjectId(p.id)}>
-                        <ProjectGlyph name={p.name} ws={p.workspace} color={p.color} size={26} />
-                        <div className="grow">
-                          <div className="truncate medium">{p.name}</div>
-                          <div className="tiny faint truncate">
-                            {p.workspaceName} · {p.displayPath}
-                          </div>
-                        </div>
-                        <span className="tiny faint num">{ago(p.lastAt)}</span>
-                      </button>
-                    ))}
-                    {!list.length && <div className="empty compact">No project matches</div>}
-                  </div>
-                </div>
-              )}
+          ) : project && projectId ? (
+            <div className="focus-card ns-project">
+              <ProjectGlyph name={project.name} ws={project.workspace} color={project.color} size={32} />
+              <div className="grow" style={{ minWidth: 0 }}>
+                <div className="bold truncate">{project.name}</div>
+                <div className="tiny faint truncate">{pre?.worktree ? `worktree ${pre.worktree.split('/').pop()}` : project.displayPath}</div>
+              </div>
+              <button className="btn sm ghost" onClick={() => setProjectId('')}>
+                Change
+              </button>
             </div>
-          )}
-          <div className="field">
-            <label>{resuming ? 'Message to continue with (optional)' : 'Goal / first prompt (optional)'}</label>
-            <textarea className="textarea" rows={4} value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder={resuming ? 'e.g. Continue where you left off and finish the export.' : 'e.g. Audit the settings page and list what exists. Ask before big changes.'} />
-          </div>
-          <div className="field">
-            <label>Name</label>
-            <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder={project ? `${project.name} – …` : 'Shown in Claude app and terminal tab'} maxLength={60} />
-          </div>
-          {!resuming && (harnesses?.harnesses || []).filter((h) => h.installed && h.enabled && (wsl || h.id === 'claude')).length > 1 && (
-            <Field label="Agent">
-              <SegmentedControl
-                value={harness}
-                onChange={(v) => setHarness(v as 'claude' | 'codex' | 'gemini')}
-                options={(harnesses?.harnesses || []).filter((h) => h.installed && h.enabled && (wsl || h.id === 'claude')).map((h) => ({ value: h.id, label: h.id === 'claude' ? 'Claude Code' : h.id === 'codex' ? 'Codex' : 'Gemini' }))}
-                label="Agent"
-              />
-            </Field>
-          )}
-          {claudeOnly && wsl && (
-            <div className="field">
-              <label>Where</label>
-              <div className="choice-grid" role="radiogroup" aria-label="Where">
-                {([
-                  { value: 'terminal', icon: <Monitor size={17} />, title: 'Terminal on PC', hint: 'A Windows Terminal tab with Remote Control, so it also shows on your phone.' },
-                  { value: 'background', icon: <Cloud size={17} />, title: 'Background', hint: 'No window on the PC. Continue it in the Claude app.' },
-                ] as const).map((o) => (
-                  <button type="button" key={o.value} role="radio" aria-checked={mode === o.value} className={`choice${mode === o.value ? ' on' : ''}`} onClick={() => setMode(o.value)}>
-                    <span className="choice-icon">{o.icon}</span>
-                    <span className="choice-title">{o.title}</span>
-                    <span className="choice-hint">{o.hint}</span>
+          ) : (
+            <div className="picker">
+              <div className="picker-search">
+                <Search size={15} />
+                <input placeholder="Pick a project…" value={filter} onChange={(e) => setFilter(e.target.value)} autoFocus={!phone} aria-label="Search projects" />
+              </div>
+              <div className="picker-list">
+                {list.map((p) => (
+                  <button type="button" key={p.id} className="picker-item" onClick={() => setProjectId(p.id)}>
+                    <ProjectGlyph name={p.name} ws={p.workspace} color={p.color} size={26} />
+                    <div className="grow" style={{ minWidth: 0 }}>
+                      <div className="truncate medium">{p.name}</div>
+                      {p.workspaceName && p.workspaceName.toLowerCase() !== p.name.toLowerCase() && <div className="tiny faint truncate">{p.workspaceName}</div>}
+                    </div>
+                    <span className="tiny faint num">{ago(p.lastAt)}</span>
                   </button>
                 ))}
+                {!list.length && <div className="empty compact">No project matches</div>}
               </div>
             </div>
           )}
-          {claudeOnly ? (
-            <Field label="Model">
-              <SegmentedControl value={model} onChange={setModel} options={MODELS} label="Model" />
-            </Field>
-          ) : (
-            <div className="hint">{effHarness === 'codex' ? 'Codex' : 'Gemini'} opens in a Windows Terminal tab on your PC (no phone link: only Claude Code has Remote Control).</div>
+          <textarea
+            className="textarea ns-prompt"
+            rows={4}
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            placeholder={resuming ? 'Message to continue with (optional)' : 'What should Claude work on? (optional)'}
+            aria-label={resuming ? 'Message to continue with' : 'First prompt'}
+            autoFocus={!phone && (resuming || !!pre?.projectId)}
+          />
+          {askTrust && (
+            <label className="row small check-row" style={{ alignItems: 'flex-start' }}>
+              <input type="checkbox" checked={trustTick} onChange={(e) => setTrustTick(e.target.checked)} style={{ marginTop: 3 }} />
+              <ShieldCheck size={14} className="faint" style={{ flex: 'none', marginTop: 2 }} />
+              <span>
+                Trust this folder in Claude Code
+                <span className="hint" style={{ display: 'block' }}>
+                  Claude asks this once per folder, on the PC, and waits until someone answers. Untick it for code you didn't write.
+                </span>
+              </span>
+            </label>
           )}
-          <div className="hint">Permissions: {boot?.settings.launch.permissionMode === 'bypassPermissions' ? 'skip permission prompts (like your usual sessions)' : boot?.settings.launch.permissionMode}. Change in Settings.</div>
+          <Disclosure
+            className="ns-options"
+            summary={
+              <span className="ns-options-sum">
+                <span className="ns-options-h">Options</span>
+                <span className="ns-options-line truncate">{optionsLine}</span>
+              </span>
+            }
+          >
+            <div className="ns-options-body">
+              <div className="field">
+                <label htmlFor="ns-name">Name</label>
+                <input id="ns-name" className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder={project ? `${project.name} – …` : 'Shown in Claude app and terminal tab'} maxLength={60} />
+              </div>
+              {!resuming && agents.length > 1 && (
+                <Field label="Agent">
+                  <SegmentedControl
+                    value={harness}
+                    onChange={(v) => setHarness(v as 'claude' | 'codex' | 'gemini')}
+                    options={agents.map((h) => ({ value: h.id, label: h.id === 'claude' ? 'Claude Code' : h.id === 'codex' ? 'Codex' : 'Gemini' }))}
+                    label="Agent"
+                  />
+                </Field>
+              )}
+              {claudeOnly && wsl && (
+                <div className="field">
+                  <label>Where</label>
+                  <div className="choice-grid" role="radiogroup" aria-label="Where">
+                    {([
+                      { value: 'terminal', icon: <Monitor size={17} />, title: 'Terminal on PC', hint: 'A Windows Terminal tab with Remote Control, so it also shows on your phone.' },
+                      { value: 'background', icon: <Cloud size={17} />, title: 'Background', hint: 'No window on the PC. Continue it in the Claude app.' },
+                    ] as const).map((o) => (
+                      <button type="button" key={o.value} role="radio" aria-checked={mode === o.value} className={`choice${mode === o.value ? ' on' : ''}`} onClick={() => setMode(o.value)}>
+                        <span className="choice-icon">{o.icon}</span>
+                        <span className="choice-title">{o.title}</span>
+                        <span className="choice-hint">{o.hint}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {claudeOnly ? (
+                <Field label="Model">
+                  <SegmentedControl value={model} onChange={setModel} options={MODELS} label="Model" />
+                </Field>
+              ) : (
+                <div className="hint">{effHarness === 'codex' ? 'Codex' : 'Gemini'} opens in a Windows Terminal tab on your PC (no phone link: only Claude Code has Remote Control).</div>
+              )}
+              <div className="hint">Permissions: {perm === 'bypassPermissions' ? 'skip permission prompts (like your usual sessions)' : perm}. Change in Settings.</div>
+            </div>
+          </Disclosure>
         </div>
       )}
     </Modal>

@@ -11,6 +11,7 @@ export const OPEN_STATUSES = new Set(['inbox', 'todo', 'doing']);
 /** Items whose status the extractor may change (unless userEdited). 'user' and 'idea' items are never touched. */
 export const AI_KINDS = new Set(['ai', 'brief', 'spinoff']);
 export const SOURCE_KINDS = new Set(['ai', 'brief', 'user', 'idea', 'spinoff']);
+export const WHO = ['you', 'claude', 'waiting'];
 
 const BACKUPS_KEPT = 21;
 const MAX_TOMBSTONES = 3000;
@@ -50,6 +51,8 @@ export function normalizeItem(it) {
     snoozeUntil: it.snoozeUntil || null, // Suggested: hidden until then
     restoredAt: it.restoredAt || null, // the user restored it from Dropped: expiry counts from here
     dismissReason: it.dismissReason || null, // not-a-task | done | duplicate | old
+    who: WHO.includes(it.who) ? it.who : null, // who does it: you | claude | waiting (from the AI; null = unknown)
+    titleBy: it.titleBy === 'short' ? 'short' : null, // 'short': retitled by the cleanup pass (work/retitle.js), never lengthened again
   };
 }
 

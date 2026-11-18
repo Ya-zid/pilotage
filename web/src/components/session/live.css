@@ -17,26 +17,46 @@
   color: var(--text-2);
   box-shadow: inset 0 0 0 1px var(--border-strong);
 }
-.sx-proj-meta {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  min-width: 0;
+.sx-proj-name {
   max-width: 220px;
 }
-.sx-group-title {
+.sx-branch {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
+  min-width: 0;
+  max-width: 200px;
 }
+.sx-branch > svg {
+  flex: none;
+  width: 12px;
+  height: 12px;
+}
+
+/* ---------- running rows ---------- */
 .live-srow {
   align-items: center;
 }
-.live-srow .lrow-lead {
-  align-self: flex-start;
+.live-srow .lrow-lead,
+.sx-lrow .lrow-lead {
+  min-width: 24px;
+  min-height: 24px;
 }
 .live-srow .lrow-title .t {
   flex: 0 1 auto;
+}
+.live-srow .lrow-body {
+  gap: 1px;
+}
+.sx-detail-line {
+  color: var(--text-2);
+}
+.live-srow.st-needs-you .sx-detail-line {
+  color: var(--amber);
+}
+.live-word {
+  font-size: var(--fs-xs);
+  font-weight: 600;
 }
 .live-word.st-word-needs-you {
   color: var(--amber);
@@ -52,28 +72,15 @@
   flex: none;
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
   position: relative;
   z-index: 1;
 }
-.live-srow-actions .tip {
-  display: inline-flex;
+.btn.icon.sx-app {
+  color: var(--text-2);
 }
-.live-branch {
-  max-width: 200px;
-}
-.live-nolink {
-  padding: 0 8px;
-}
-.live-stop:hover {
-  color: var(--red);
-  background: color-mix(in srgb, var(--red) 13%, transparent);
-}
-.launch-row {
-  align-items: center;
-}
-.launch-row .lrow-lead {
-  align-self: flex-start;
+.btn.icon.sx-app:hover {
+  color: var(--accent-text);
 }
 .live-needs-you {
   border-color: color-mix(in srgb, var(--amber) 40%, var(--border));
@@ -81,12 +88,12 @@
 .live-fold {
   display: flex;
   width: 100%;
-  justify-content: center;
-  padding: 10px 20px;
+  justify-content: flex-start;
+  padding: 10px 20px 10px 56px;
   border: 0;
   border-top: 1px solid var(--border);
   background: none;
-  color: var(--text-2);
+  color: var(--text-3);
   font: inherit;
   font-size: var(--fs-sm);
   font-weight: 550;
@@ -104,85 +111,141 @@
   padding-top: 10px;
 }
 
-/* session list rows */
+/* ---------- session list rows: one line on a PC (title · project · branch … time) ---------- */
+.sx-lrow {
+  align-items: center;
+}
+.sx-lrow.has-match {
+  align-items: flex-start;
+}
+.sx-lrow .lrow-body {
+  gap: 2px;
+}
+.sx-line {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  min-width: 0;
+}
+.sx-line > .lrow-title {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.sx-line > .lrow-title .t {
+  flex: 0 1 auto;
+}
+.meta.sx-meta {
+  flex: 0 10 auto;
+  min-width: 0;
+}
+.meta.sx-meta,
+.live-srow .lrow-body > .meta {
+  flex-wrap: nowrap;
+  overflow: hidden;
+  white-space: nowrap;
+}
+/* one-line meta: the branch gives way first, the time never does, the project keeps a few letters */
+.meta.sx-meta > *,
+.live-srow .lrow-body > .meta > * {
+  flex: 0 1 auto;
+}
+.meta.sx-meta > :has(> .sx-branch),
+.live-srow .lrow-body > .meta > :has(> .sx-branch) {
+  flex-shrink: 40;
+}
+.live-srow .lrow-body > .meta > :last-child {
+  flex: none;
+}
+.sx-state-word {
+  flex: none;
+  position: relative;
+  z-index: 1;
+}
 .sx-lrow .lrow-trail {
   min-width: 44px;
   justify-content: flex-end;
 }
-.sx-branch {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
-  max-width: 200px;
+.sx-nodot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-4);
 }
-.sx-branch > svg {
-  flex: none;
-  width: 12px;
-  height: 12px;
+.sx-row-acts {
+  display: inline-flex;
+  position: relative;
+  z-index: 1;
+}
+.sx-row-acts:empty {
+  display: none;
+}
+.btn.icon.sx-resume-btn {
+  color: var(--text-2);
+}
+
+/* PC: the row action shows on hover (or keyboard focus); "Needs you" rows keep theirs visible. */
+@media (hover: hover) and (min-width: 861px) {
+  .live-srow:not(.st-needs-you) .live-srow-actions,
+  .sx-row-acts {
+    opacity: 0;
+    transition: opacity var(--dur-1);
+  }
+  .live-srow:hover .live-srow-actions,
+  .live-srow:focus-within .live-srow-actions,
+  .sx-lrow:hover .sx-row-acts,
+  .sx-lrow:focus-within .sx-row-acts {
+    opacity: 1;
+  }
+  /* the hover action takes the place of nothing: keep the time where it is */
+  .sx-row-acts {
+    position: absolute;
+    right: calc(100% + 4px);
+  }
+  .sx-lrow .lrow-trail {
+    position: relative;
+  }
 }
 
 @media (max-width: 860px) {
-  .live-srow,
-  .launch-row {
-    flex-wrap: wrap;
-    align-items: flex-start;
-    row-gap: 12px;
+  /* phone: title, then project · branch on a second line; the app link is a borderless 40px icon */
+  .sx-line {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 1px;
   }
-  .live-srow > .lrow-body,
-  .launch-row > .lrow-body {
-    flex: 1 1 calc(100% - 40px);
+  .sx-lrow .lrow-lead,
+  .live-srow .lrow-lead {
+    align-self: flex-start;
+    margin-top: 1px;
   }
-  .live-srow-actions {
-    flex: 1 1 100%;
-    padding-left: 32px;
-    gap: 8px;
+  .sx-lrow.no-meta .lrow-lead {
+    align-self: center;
+    margin-top: 0;
   }
-  .live-srow-actions .live-open {
-    flex: 1;
-    height: 44px;
-    min-height: 44px;
-    font-size: 14px;
+  .sx-state-word {
+    display: none;
   }
-  .live-srow-actions .live-view {
-    height: 44px;
-    min-height: 44px;
-    padding: 0 16px;
+  .sx-row-acts .sx-resume-btn {
+    display: none;
   }
-  .live-nolink {
-    flex: 1;
-    padding: 0;
+  .btn.icon.sx-app {
+    width: 40px;
+    height: 40px;
+    min-height: 40px;
+    margin: -8px -10px -8px 0;
+  }
+  .btn.icon.sx-app svg {
+    width: 19px;
+    height: 19px;
   }
   .live-fold {
     min-height: 44px;
+    padding-left: 52px;
   }
-  /* Working / Open rows stay one compact line on the phone: a tap opens the session; only "Needs you" rows carry the
-     full-width "Open in Claude app" button (SIMPLIFY §4). */
-  .live-srow:not(.st-needs-you) {
-    flex-wrap: nowrap;
-    align-items: center;
-  }
-  .live-srow:not(.st-needs-you) > .lrow-body {
-    flex: 1 1 auto;
-  }
-  .live-srow:not(.st-needs-you) .live-srow-actions {
-    flex: 0 0 auto;
-    padding-left: 0;
-  }
-  .live-srow:not(.st-needs-you) .live-view,
-  .live-srow:not(.st-needs-you) .live-nolink,
-  .live-srow:not(.st-needs-you) .live-stop {
+}
+@media (max-width: 860px) {
+  /* phone: project · time is enough; the branch shows where the project isn't (project page) */
+  .meta > :has(> .sx-proj-name) ~ :has(> .sx-branch) {
     display: none;
-  }
-  .live-srow:not(.st-needs-you) .live-open {
-    flex: 0 0 auto;
-    width: 44px;
-    padding: 0;
-    font-size: 0;
-    justify-content: center;
-  }
-  .live-srow:not(.st-needs-you) .live-open svg {
-    width: 18px;
-    height: 18px;
   }
 }

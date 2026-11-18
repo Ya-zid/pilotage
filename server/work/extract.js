@@ -3,17 +3,23 @@
 //
 // Rules
 // - Per session, only the LATEST digested block counts. If it is in_progress / blocked / ongoing and has a nextStep,
-//   that next step is an open loop (source key `blk:<blockKey>`).
-// - Each project brief nextStep is an open loop (source key `brf:<projectHash>:<textHash>`).
-// - Dedupe per project: a candidate whose title matches an existing item (normalized text, or ≥60% shared words)
-//   attaches its key to that item instead of creating a new one. Keys are stable, so an item keeps its id.
+//   that next step is an open loop (source key `blk:<blockKey>`). Only sessions active in the last LOOP_DAYS make
+//   new items; older loops still count as evidence.
+// - The top BRIEF_TOP project brief nextSteps are open loops (source key `brf:<projectHash>:<textHash>`).
+// - Titles: the AI's short to-do (digest.todo, brief.todos[i]) when there is one, else toTitle() of the step. The
+//   detail is the Claude-facing step itself. "waiting" steps (blocked on someone else) never make new items.
+// - Dedupe across a project and its parent/child folders: a candidate whose title (or step text) matches an existing
+//   item (normalized text, or ≥60% shared words) attaches its key to that item instead of creating a new one. Keys
+//   are stable, so an item keeps its id.
+// - At most MAX_OPEN_SUGGESTIONS untouched suggestions per project: older ones expire (restorable).
 // - New items land in 'inbox' (shown as Suggested). Only the user moves things to To do (v3, docs/SIMPLIFY.md §1).
 // - Evidence for an item = the newest signal among its keys: open (still a candidate), done (session's latest
 //   digest says done), abandoned, superseded (a newer block in that session moved on), removed (the brief was
 //   rewritten without it), stale (project idle > 45 days or marked done/archived). Ties go to "open".
 //   A brief step that is still listed, just below the top 3, keeps its item but never reopens one; "removed" doesn't
 //   beat a session loop that is still open and less than a week old.
-// - Status changes only for AI-managed items that the user has not edited. user/idea items are never touched.
+// - Status changes only for AI-managed items that the user has not edited. user/idea items are never touched. A title
+//   the cleanup pass shortened (titleBy 'short', work/retitle.js) is never replaced by a re-digest's longer wording.
 //   Everything else only gets `aiStatus` (a hint the UI can show: "AI thinks this is done"), except the closing
 //   evidence the user already overruled by restoring an AI-closed card.
 // - A new session loop never hides inside a task the user closed as done before it (recurring work: deploy again,
@@ -23,9 +29,12 @@ import { OPEN_STATUSES, AI_KINDS, normalizeItem } from './store.js';
 import { userName, nameRxSource } from '../profile.js';
 
 const DAY = 86400e3;
-export const STALE_DAYS = 45;
+export const STALE_DAYS = 45; // a project this quiet: its open items go stale
+export const LOOP_DAYS = 10; // a session's next step makes a new suggestion only while the session is this recent
+export const MAX_OPEN_SUGGESTIONS = 3; // per project; a 4th expires the oldest
+export const TODO_MAX = 60; // a task title from the AI's short to-do
 const OPEN_DIGEST = new Set(['in_progress', 'blocked', 'ongoing']);
-const BRIEF_TOP = 3;
+const BRIEF_TOP = 2;
 const LOOP_TRUST = 7 * DAY; // a session loop this recent outweighs a brief that dropped the step
 const GIT_HYGIENE = /\b(?:worktrees?|uncommitted|unpushed|stash(?:es)?)\b|\bcommit (?:it|them|or discard)|\bpush (?:the|your|those) commits\b/i;
 const PRUNE_CLOSED_AFTER = 150 * DAY;
@@ -131,10 +140,15 @@ function deconjugate(verb) {
 
 const NO_CUT_AFTER_COMMA = /^(?:or|which|who|whom|where|that|e\.g|i\.e|including|such|like|plus|\d)/i;
 
-/** Shorten a long clause at ", then" / ", and" / the first comma that starts a new action. */
+// A reason or condition tacked on after the action: "Rotate the keys since the old ones leaked" → "Rotate the keys".
+const TAIL_CLAUSE = /,?\s+(?:since|because|so that|now that|as soon as|before|after|once|until|unless)\s/i;
+
+/** Shorten a long clause at ", then" / a reason or condition / ", and" / the first comma that starts a new action. */
 function cutLongClause(t, soft = 72) {
   const then = /,?\s+(?:and\s+)?then\s+/i.exec(t);
   if (then && then.index >= 20) t = t.slice(0, then.index);
+  const tail = TAIL_CLAUSE.exec(t.slice(20));
+  if (tail) t = t.slice(0, 20 + tail.index);
   if (t.length <= soft) return t;
   // "Before running X, check Y": the action is after the first comma, so never cut there.
   let skip = /^(?:before|after|if|when|once|while|until|unless|as soon as|since|because|to|for|in|on|with)\b/i.test(t) ? 1 : 0;
@@ -169,6 +183,8 @@ export function toTitle(text, max = 96) {
     if (base) t = base + t.slice(m[0].length);
   }
   t = t.replace(TIME_PREFIX, '');
+  // "Only after the cause is clear, propose a patch" → "propose a patch": the condition is not the task.
+  t = t.replace(/^(?:before|after|once|only after|only once|when)\b[^,]{0,60},\s*/i, '');
   // Parentheticals go before any comma cut so "(a, b)" never gets split in half.
   t = t.replace(/\s*\([^()]{0,160}\)/g, '').replace(/\s*\([^()]*$/, '').replace(/\s{2,}/g, ' ');
   t = cutLongClause(t);
@@ -180,6 +196,21 @@ export function toTitle(text, max = 96) {
   }
   return t ? t[0].toUpperCase() + t.slice(1) : '';
 }
+
+/** The task title: the AI's short to-do when it wrote one, else a shortened next step (older summaries). */
+export function shortTitle(todo, step) {
+  const t = oneLine(todo).replace(/[\s.;:,–—-]+$/, '');
+  if (t) return clip(t[0].toUpperCase() + t.slice(1), TODO_MAX);
+  return toTitle(step);
+}
+const WHO = new Set(['you', 'claude', 'waiting']);
+const whoOf = (w) => (WHO.has(w) ? w : null);
+
+/** The step text an item was made from: its detail without the "From: …" recap older versions appended. */
+export const stepText = (detail) => String(detail || '').split(/\n\s*\n/)[0].trim();
+
+/** Same folder, or one inside the other (a repo and its subfolder are often separate projects about the same work). */
+export const relatedPaths = (a, b) => !!a && !!b && (a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`));
 
 const blockIndex = (key) => Number(String(key).split(':').pop()) || 0;
 const projectHash = (p) => hash(p, 10);
@@ -248,42 +279,51 @@ export function deriveCandidates(input, ix, now = Date.now()) {
     const p = ix.projectOf.get(sid);
     if (!p) continue;
     const ps = projectState(input, ix, p, now);
-    const title = toTitle(d.nextStep);
+    const title = shortTitle(d.todo, d.nextStep);
     if (!title) continue;
     const isLatest = ix.projectLatest.get(p) === L.key;
     const at = L.endAt || L.startAt || 0;
-    const tooOld = now - at > STALE_DAYS * DAY;
+    const tooOld = now - at > LOOP_DAYS * DAY;
+    const who = whoOf(d.who);
     out.push({
       key: `blk:${L.key}`,
       projectPath: p,
       title,
-      detail: `${oneLine(d.nextStep)}\n\nFrom: “${d.title}” — ${oneLine(d.outcome)}`,
+      detail: oneLine(d.nextStep), // what a Claude session needs (shown on tap; the Start prompt)
       at,
       bucket: 'inbox', // v3: AI finds suggestions; only the user moves things to To do (SIMPLIFY §1)
       priority: d.status === 'blocked' || isLatest ? 2 : 1,
       source: { kind: 'ai', sessionId: sid, blockKey: L.key },
       digestStatus: d.status,
-      create: !ps.hidden && !ps.closed && !tooOld && !(input.sessionHidden && input.sessionHidden(sid)),
+      who,
+      create: !ps.hidden && !ps.closed && !tooOld && who !== 'waiting' && !(input.sessionHidden && input.sessionHidden(sid)),
     });
   }
   for (const [p, entry] of Object.entries(input.briefs || {})) {
-    // Top steps only (the brief lists them most important first), minus git hygiene that Pilotage already shows as signals.
-    const steps = (entry?.brief?.nextSteps || []).filter((s) => !GIT_HYGIENE.test(s)).slice(0, BRIEF_TOP);
+    // Top steps only (the brief lists them most important first), minus git hygiene that Pilotage already shows as
+    // signals. The index into nextSteps is kept: todos[i] / whos[i] run parallel to it.
+    const b = entry?.brief || {};
+    const steps = (b.nextSteps || [])
+      .map((step, i) => ({ step, i }))
+      .filter(({ step }) => !GIT_HYGIENE.test(step))
+      .slice(0, BRIEF_TOP);
     if (!steps.length) continue;
     const ps = projectState(input, ix, p, now);
-    steps.forEach((step, i) => {
-      const title = toTitle(step);
+    steps.forEach(({ step, i }, rank) => {
+      const title = shortTitle(b.todos?.[i], step);
       if (!title) return;
+      const who = whoOf(b.whos?.[i]);
       out.push({
         key: `brf:${projectHash(p)}:${stepHash(step)}`,
         projectPath: p,
         title,
-        detail: `${oneLine(step)}\n\nFrom the project summary.`,
+        detail: oneLine(step),
         at: entry.at || 0,
         bucket: 'inbox',
-        priority: i === 0 ? 2 : 1,
+        priority: rank === 0 ? 2 : 1,
         source: { kind: 'brief', step: i },
-        create: !ps.hidden && !ps.closed && !ps.idle,
+        who,
+        create: !ps.hidden && !ps.closed && !ps.idle && who !== 'waiting',
       });
     });
   }
@@ -365,7 +405,7 @@ function evidenceFor(item, input, ix, current, stats, now = Date.now()) {
 function isTombstoned(data, c) {
   for (const t of data.tombstones || []) {
     if (t.keys?.includes(c.key)) return true;
-    if (t.projectPath === c.projectPath && similar(t.title, c.title)) return true;
+    if (relatedPaths(t.projectPath, c.projectPath) && similar(t.title, c.title)) return true;
   }
   return false;
 }
@@ -374,7 +414,7 @@ function isTombstoned(data, c) {
  * Bring data.items in line with the AI state. Mutates `data`; returns stats (stats.changed tells whether to save).
  */
 export function reconcile(data, input, now = Date.now()) {
-  const stats = { created: 0, attached: 0, refreshed: 0, closed: 0, dropped: 0, reopened: 0, pruned: 0, hints: 0, changed: false, candidates: 0 };
+  const stats = { created: 0, attached: 0, refreshed: 0, closed: 0, dropped: 0, reopened: 0, expired: 0, pruned: 0, hints: 0, changed: false, candidates: 0 };
   data.items = (data.items || []).map((it) => (it.keys && it.launches ? it : normalizeItem(it)));
   const ix = buildIndex(input);
   const cands = deriveCandidates(input, ix, now);
@@ -386,18 +426,25 @@ export function reconcile(data, input, now = Date.now()) {
     current.set(c.key, c);
     let item = byKey.get(c.key);
     if (item) {
-      // Same source, maybe re-digested with new wording: refresh unless the user took ownership.
-      if (!item.userEdited && item.keys[0] === c.key && AI_KINDS.has(item.source.kind) && (item.title !== c.title || item.detail !== c.detail)) {
-        item.title = c.title;
-        item.detail = c.detail;
-        item.updatedAt = now;
-        stats.refreshed++;
-        stats.changed = true;
+      // Same source, maybe re-digested with new wording: refresh unless the user took ownership. A title the cleanup
+      // pass shortened stays (a re-digest of an old block would bring the long wording back).
+      if (!item.userEdited && item.keys[0] === c.key && AI_KINDS.has(item.source.kind)) {
+        const title = item.titleBy === 'short' ? item.title : c.title;
+        const who = c.who || item.who || null;
+        if (item.title !== title || item.detail !== c.detail || item.who !== who) {
+          item.title = title;
+          item.detail = c.detail;
+          item.who = who;
+          item.updatedAt = now;
+          stats.refreshed++;
+          stats.changed = true;
+        }
       }
     } else {
       if (isTombstoned(data, c)) continue;
       const loose = (it) => (it.source.kind === 'brief') !== c.key.startsWith('brf:') || it.source.kind === 'user' || it.source.kind === 'idea';
-      const same = (it) => it.projectPath === c.projectPath && similar(it.title, c.title, { loose: loose(it) });
+      // The same title, or the same step in other words (the detail is the step text the title was made from).
+      const same = (it) => relatedPaths(it.projectPath, c.projectPath) && (similar(it.title, c.title, { loose: loose(it) }) || similar(stepText(it.detail), c.detail));
       // A session loop newer than the moment the user marked a lookalike task done is new work (deploy again, rerun):
       // attaching it there would hide it, since closed cards show no AI hint. AI-closed items can still take it (the
       // evidence reopens them), and so can dropped ones, so a loop the user threw away doesn't come back.
@@ -425,6 +472,7 @@ export function reconcile(data, input, now = Date.now()) {
           keys: [c.key],
           sourceAt: c.at,
           aiBucket: c.bucket,
+          who: c.who,
         });
         if (data.items.some((x) => x.id === item.id)) item.id = `ai_${hash(`${c.key}:${now}`, 10)}`;
         data.items.push(item);
@@ -491,6 +539,9 @@ export function reconcile(data, input, now = Date.now()) {
     }
   }
 
+  stats.expired = capSuggestions(data.items, now);
+  if (stats.expired) stats.changed = true;
+
   // Housekeeping: forget long-closed AI items nobody touched (their sources are far too old to come back).
   const before = data.items.length;
   data.items = data.items.filter((it) => !(AI_KINDS.has(it.source.kind) && !it.userEdited && it.closedBy === 'ai' && !OPEN_STATUSES.has(it.status) && now - (it.updatedAt || 0) > PRUNE_CLOSED_AFTER));
@@ -498,6 +549,34 @@ export function reconcile(data, input, now = Date.now()) {
   if (stats.pruned) stats.changed = true;
   data.meta = { ...(data.meta || {}), lastExtractAt: now, lastExtract: { ...stats, at: now } };
   return stats;
+}
+
+/**
+ * At most MAX_OPEN_SUGGESTIONS untouched AI suggestions per project: the ones with the oldest evidence expire
+ * (dropped, closedBy 'expired', restorable). Snoozed, restored and edited ones are the user's and don't count.
+ * Mutates items; returns how many expired.
+ */
+export function capSuggestions(items, now = Date.now(), max = MAX_OPEN_SUGGESTIONS) {
+  const groups = new Map();
+  for (const it of items) {
+    if (it.status !== 'inbox' || it.userEdited || it.restoredAt || !AI_KINDS.has(it.source.kind) || (it.snoozeUntil && it.snoozeUntil > now)) continue;
+    const g = groups.get(it.projectPath) || [];
+    g.push(it);
+    groups.set(it.projectPath, g);
+  }
+  let n = 0;
+  for (const g of groups.values()) {
+    if (g.length <= max) continue;
+    g.sort((a, b) => (b.sourceAt || 0) - (a.sourceAt || 0) || (b.priority || 0) - (a.priority || 0) || (b.createdAt || 0) - (a.createdAt || 0));
+    for (const it of g.slice(max)) {
+      it.status = 'dropped';
+      it.closedBy = 'expired';
+      it.closedEvidenceAt = now;
+      it.updatedAt = now;
+      n++;
+    }
+  }
+  return n;
 }
 
 // ---------------------------------------------------------------- live adapter

@@ -1,23 +1,23 @@
-// Ideas (SIMPLIFY §8): things you might do. Three sections, top to bottom:
+// Ideas (SIMPLIFY §8): things you might do. Two sections, top to bottom:
 //   Possible projects  the AI scout's candidates (components/ideas/ScoutCards), "Look for project ideas" in the header
 //   Your ideas         fast capture (phone-first), then turn an idea into a task, a project or a session
-//   From today's plan  ideas the daily plan noticed: Keep (→ Your ideas) or Dismiss (hidden for the day)
+// No page subtitle; the daily plan's loose ideas are no longer listed here (they were never kept).
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { Check, Lightbulb, ListChecks, MoreHorizontal, Play, Plus, Sparkles, Telescope, X } from 'lucide-react';
-import { api, ApiError, useIdeas, useInvalidate, useOverview, useProjects } from '../api';
+import { Check, Lightbulb, ListChecks, MoreHorizontal, Play, Plus, Sparkles, Telescope } from 'lucide-react';
+import { api, ApiError, useIdeas, useInvalidate, useProjects } from '../api';
 import { scoutRun, useScout } from '../api-extra';
 import type { Idea, ProjectSummary } from '../types';
-import { Button, Card, EmptyState, ErrorBox, IconButton, Kbd, LoadingCard, Meta, PageHeader, ProjectGlyph, Section, SegmentedControl, StatusIcon, Toolbar, ToolbarSpacer, useToast } from '../components/ui';
+import { Button, EmptyState, ErrorBox, IconButton, Kbd, LoadingCard, Meta, PageHeader, ProjectGlyph, Section, SegmentedControl, StatusIcon, Toolbar, ToolbarSpacer, useToast } from '../components/ui';
 import { useApp } from '../components/AppContext';
 import { IdeaActions, IdeaSheet } from '../components/ideas/IdeaSheet';
 import { NewProjectDialog } from '../components/ideas/NewProjectDialog';
 import { ScoutCards } from '../components/ideas/ScoutCards';
 import { IdeaX, ProjectSelect, baseName, errMsg, ideaTitle, isMac, looksLikePhone } from '../components/ideas/shared';
 import { TaskUndoToast } from '../components/tasks/TaskBits';
-import { friendly, offerUndo } from '../components/tasks/model';
-import { ago, fmtDate, fmtDateTime, isoDay, plural } from '../util';
+import { friendly } from '../components/tasks/model';
+import { ago, fmtDateTime, plural } from '../util';
 import './Ideas.css';
 import '../components/ideas/ideas.css';
 
@@ -158,16 +158,7 @@ export default function Ideas() {
   const sheetIdea = sheetId ? ideas.find((i) => i.id === sheetId) : undefined;
 
   let empty: { title: string; body: React.ReactNode; action?: React.ReactNode };
-  if (ideas.length === 0)
-    empty = {
-      title: 'No ideas yet',
-      body: 'Write down anything: a feature, a fix, a project you would like to start. Turn it into a task or a session when it is ready.',
-      action: (
-        <Button size="sm" icon={<Plus />} onClick={() => composerRef.current?.focus()}>
-          Write one
-        </Button>
-      ),
-    };
+  if (ideas.length === 0) empty = { title: 'No ideas yet', body: 'Write one above.' };
   else if (pf)
     empty = {
       title: 'Nothing here',
@@ -183,13 +174,14 @@ export default function Ideas() {
 
   return (
     <>
-      <PageHeader title="Ideas" subtitle="Things you might do, including possible new projects the AI spotted in your work." actions={<LookForProjects />} />
+      <PageHeader title="Ideas" actions={<LookForProjects />} />
 
       <ScoutCards showEmpty />
 
       <Section title="Your ideas" count={counts.open || undefined}>
         <Composer projects={projects} inputRef={composerRef} />
 
+        {ideas.length > 0 && (
         <div className="stack">
           <Toolbar className="idea-toolbar">
             <SegmentedControl
@@ -253,9 +245,10 @@ export default function Ideas() {
             </div>
           )}
         </div>
+        )}
+        {ideas.length === 0 && ideasQ.error ? <ErrorBox error={ideasQ.error} /> : null}
       </Section>
 
-      <PlanIdeas ideas={ideas} loaded={!!ideasQ.data} />
       <TaskUndoToast />
 
       {sheetIdea && (
@@ -464,96 +457,5 @@ function LookForProjects() {
         Look for project ideas
       </Button>
     </div>
-  );
-}
-
-// ---------------------------------------------------------------- From today's plan
-const PLAN_HIDDEN_KEY = 'pilotage.ideas.planHidden';
-const normIdea = (t: string) => t.toLowerCase().replace(/\s+/g, ' ').trim();
-
-function readHidden(day: string): string[] {
-  try {
-    const v = JSON.parse(localStorage.getItem(PLAN_HIDDEN_KEY) || 'null');
-    return v && v.day === day && Array.isArray(v.keys) ? v.keys : [];
-  } catch {
-    return [];
-  }
-}
-function writeHidden(day: string, keys: string[]) {
-  try {
-    localStorage.setItem(PLAN_HIDDEN_KEY, JSON.stringify({ day, keys }));
-  } catch {
-    /* storage unavailable: the dismissal only lasts this visit */
-  }
-}
-
-/** The ideas today's plan noticed (overview.daily.ideas). Keep saves one to Your ideas; Dismiss hides it for the day. */
-function PlanIdeas({ ideas, loaded }: { ideas: IdeaX[]; loaded: boolean }) {
-  const { data: ov } = useOverview();
-  const qc = useQueryClient();
-  const inv = useInvalidate();
-  const toast = useToast();
-  const daily = ov?.daily;
-  const day = daily?.day || '';
-  const [hidden, setHidden] = useState<string[]>(() => readHidden(day));
-  const [busy, setBusy] = useState<string | null>(null);
-  useEffect(() => setHidden(readHidden(day)), [day]);
-  const known = useMemo(() => new Set(ideas.map((i) => normIdea(i.text))), [ideas]);
-  if (!loaded || !daily?.ideas?.length) return null;
-  const items = daily.ideas.filter((t) => t && t.trim() && !known.has(normIdea(t)) && !hidden.includes(normIdea(t)));
-  if (!items.length) return null;
-
-  const hide = (t: string, on: boolean) => {
-    const k = normIdea(t);
-    const next = on ? [...new Set([...readHidden(day), k])] : readHidden(day).filter((x) => x !== k);
-    writeHidden(day, next);
-    setHidden(next);
-  };
-  const keep = async (t: string) => {
-    setBusy(t);
-    try {
-      const idea = await api<Idea>('/api/ideas', { method: 'POST', body: { text: t.trim(), source: 'ai' } });
-      qc.setQueryData<Idea[]>(['ideas'], (old) => (old ? [idea, ...old.filter((x) => x.id !== idea.id)] : old));
-      inv('ideas', 'overview');
-      toast('Saved to Your ideas');
-    } catch (e) {
-      toast(`Couldn't save the idea: ${errMsg(e)}`, true);
-    } finally {
-      setBusy(null);
-    }
-  };
-  const today = day === isoDay(Date.now());
-  return (
-    <Section title={today ? 'From today’s plan' : `From the plan of ${fmtDate(daily.at)}`} count={items.length}>
-      <Card flush className="plan-ideas">
-        {items.map((t) => (
-          <div key={t} className="lrow plan-idea">
-            <div className="lrow-lead">
-              <Sparkles size={15} className="faint" aria-hidden="true" />
-            </div>
-            <div className="lrow-body">
-              <div className="plan-idea-text">{t}</div>
-            </div>
-            <div className="plan-idea-actions">
-              <Button size="sm" icon={<Check />} loading={busy === t} onClick={() => keep(t)} title="Save it to Your ideas">
-                Keep
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                icon={<X />}
-                onClick={() => {
-                  hide(t, true);
-                  offerUndo('Dismissed for today', () => hide(t, false));
-                }}
-              >
-                Dismiss
-              </Button>
-            </div>
-          </div>
-        ))}
-      </Card>
-      <div className="hint">Noticed by the AI while writing {today ? 'today’s' : 'the latest'} plan. Nothing is saved until you keep it.</div>
-    </Section>
   );
 }

@@ -11,7 +11,7 @@ import { useApp } from '../AppContext';
 import { plural } from '../../util';
 import { IdeaX, errMsg, postRaw, suggestName } from './shared';
 
-type DryRun = { ok: true; dryRun: true; path: string; displayPath: string; slug: string; parent: string; insideRepo: string | null; workspace: string | null; goal: string; related: string[] };
+type DryRun = { ok: true; dryRun: true; path: string; displayPath: string; slug: string; parent: string; newParent?: string | null; insideRepo: string | null; workspace: string | null; goal: string; related: string[] };
 type Preview = { state: 'idle' } | { state: 'loading' } | { state: 'ok'; d: DryRun } | { state: 'error'; msg: string; suggestion?: string | null };
 
 export function NewProjectDialog({ idea, projects, onClose }: { idea: IdeaX; projects: ProjectSummary[] | undefined; onClose: () => void }) {
@@ -200,7 +200,7 @@ export function NewProjectDialog({ idea, projects, onClose }: { idea: IdeaX; pro
           </label>
         </div>
         <Disclosure summary="Folder location">
-          <Field label="Create it inside" htmlFor="np-parent" hint="Leave empty for your home folder. Must be inside your home folder.">
+          <Field label="Create it inside" htmlFor="np-parent" hint="Leave empty for your home folder. Folders that don't exist yet are created.">
             <input id="np-parent" className="input mono" value={parentDir} onChange={(e) => setParentDir(e.target.value)} placeholder="~" spellCheck={false} autoCapitalize="off" />
           </Field>
         </Disclosure>
@@ -231,7 +231,7 @@ export function NewProjectDialog({ idea, projects, onClose }: { idea: IdeaX; pro
               <div className="np-path">
                 <FolderPlus size={15} className="faint" aria-hidden="true" />
                 <span className="mono">{preview.d.displayPath}</span>
-                <span className="tiny faint">new folder</span>
+                <span className="tiny faint">{preview.d.newParent ? `new folders from ${preview.d.newParent}` : 'new folder'}</span>
               </div>
               {preview.d.insideRepo && <div className="small tone-amber">Inside the git repo {preview.d.insideRepo}; it gets its own repository.</div>}
               {preview.d.related.length > 0 && (
