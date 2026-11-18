@@ -7,6 +7,11 @@ minor versions.
 
 ## [Unreleased]
 
+### Added
+
+- CLI: `pilotage version` prints the installed version and short commit, and the version reported by a running
+  server (with a hint to restart when the two differ).
+
 ### Fixed
 
 - WSL: Pilotage repairs itself when Windows loses its connection to it (after sleep or a network change). A

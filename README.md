@@ -124,6 +124,7 @@ are very welcome (see [Contributing](#contributing)).
 
 ```
 pilotage status       # running? phone forwarder? firewall rule? autostart?
+pilotage version      # installed version, short commit, and the running server's version
 pilotage open         # open in the browser (one-time login)
 pilotage phone        # enable phone access (WSL: one Windows admin prompt)
 pilotage pair         # QR code in the terminal to pair a phone
