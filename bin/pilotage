@@ -347,7 +347,8 @@ uninstall_done() {
 }
 
 cmd_uninstall() {
-  [ -L "$HOME/.local/bin/pilotage" ] && rm -f "$HOME/.local/bin/pilotage"
+  local linked=0
+  if [ -L "$HOME/.local/bin/pilotage" ]; then rm -f "$HOME/.local/bin/pilotage"; linked=1; fi
   if [ "$IS_WSL" != 1 ] || [ -z "$WIN_HOME" ]; then
     if [ "$IS_MAC" = 1 ] && [ -f "$LA_PLIST" ]; then
       launchctl bootout "gui/$(id -u)/$LA_LABEL" >/dev/null 2>&1 || true
@@ -355,7 +356,7 @@ cmd_uninstall() {
       say "Removed the login item (LaunchAgent)."
     fi
     cmd_stop
-    say "Removed the pilotage command link."
+    [ "$linked" = 1 ] && say "Removed the pilotage command from ~/.local/bin."
     uninstall_done "${1:-}"
     return
   fi
