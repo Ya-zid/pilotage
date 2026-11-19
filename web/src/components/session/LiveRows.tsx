@@ -4,7 +4,7 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { CheckCircle2, GitBranch, Monitor, MoreHorizontal, Smartphone, Square } from 'lucide-react';
-import { api, useInvalidate, useWsl } from '../../api';
+import { api, terminalPlace, useInvalidate, useTerminal } from '../../api';
 import { Card, Disclosure, IconButton, Meta, Section, Snippet, Spinner, StatusIcon, useToast } from '../ui';
 import type { Launch, SessionSummary } from '../../types';
 import { ago, fmtDateTime } from '../../util';
@@ -41,7 +41,7 @@ export function BranchBit({ name }: { name: string }) {
 export function LiveSessionRow({ s, showProject = true }: { s: SessionSummary; showProject?: boolean }) {
   const toast = useToast();
   const inv = useInvalidate();
-  const wsl = useWsl();
+  const term = useTerminal();
   const l = s.live!;
   const st = runState(s);
   const bg = l.kind === 'background';
@@ -59,11 +59,11 @@ export function LiveSessionRow({ s, showProject = true }: { s: SessionSummary; s
   };
   const attach = () =>
     api(`/api/sessions/${s.id}/attach`, { method: 'POST' })
-      .then(() => toast('Opened in Windows Terminal'))
+      .then(() => toast(`Opened in ${term}`))
       .catch((e) => toast(errText(e), true));
   const menu: MenuEntry[] = [];
   if (bg && l.bgId) {
-    if (wsl) menu.push({ label: 'Attach on PC', icon: <Monitor />, hint: 'Bring it into a Windows Terminal tab', onSelect: attach });
+    if (term) menu.push({ label: 'Attach on PC', icon: <Monitor />, hint: `Bring it into ${terminalPlace(term)}`, onSelect: attach });
     menu.push({ label: 'Stop', icon: <Square />, danger: true, hint: 'The conversation is kept', onSelect: stop });
   }
   return (

@@ -1,7 +1,7 @@
 // Settings → New sessions, Projects & scanning, Name & appearance, About.
 import React, { useEffect, useMemo, useState } from 'react';
 import { Check, Cloud, Copy, FolderSearch, Laptop, Monitor, Moon, Palette, Rocket, Smartphone, Sun, Tag, Terminal, Info, ShieldCheck, UserRound } from 'lucide-react';
-import { useBootstrap, useInvalidate, useProjects } from '../../api';
+import { terminalPlace, useBootstrap, useInvalidate, useProjects, useTerminal } from '../../api';
 import type { Settings as SettingsT } from '../../types';
 import { Button, IconButton, SegmentedControl, Skeleton, Switch, WorkspaceAvatar, useToast } from '../ui';
 import { copy, plural } from '../../util';
@@ -53,8 +53,8 @@ export function sessionsSummary(s: SettingsT | undefined) {
 
 export function NewSessionsSection({ s, patch }: { s: SettingsT; patch: PatchFn }) {
   const l = s.launch;
-  // Terminal launches need WSL2 + Windows Terminal; elsewhere every session starts in the background.
-  const wsl = useBootstrap().data?.platform?.wsl !== false;
+  // No terminal on this PC (headless, over SSH): every session starts in the background.
+  const term = useTerminal();
   const setLaunch = (p: Partial<SettingsT['launch']>, msg: string) => patch({ settings: { launch: p } }, msg);
   const perm = PERMISSION_OPTS.find((o) => o.value === l.permissionMode);
   const permOpts = perm ? PERMISSION_OPTS : [...PERMISSION_OPTS, { value: l.permissionMode, label: l.permissionMode, hint: '' }];
@@ -85,14 +85,14 @@ export function NewSessionsSection({ s, patch }: { s: SettingsT; patch: PatchFn 
             onChange={(v) => setLaunch({ model: v }, `Model: ${LAUNCH_MODELS.find((o) => o.value === v)?.label || v}`)}
           />
         </SettingRow>
-        {wsl ? (
+        {term ? (
           <SettingRow
             label={
               <span className="row" style={{ gap: 8 }}>
                 <Monitor size={15} className="faint" aria-hidden="true" /> Started from the PC
               </span>
             }
-            hint="Terminal opens a Windows Terminal tab you can type in."
+            hint={`Terminal opens ${terminalPlace(term)} you can type in.`}
           >
             <SegmentedControl size="sm" label="Default for sessions started from the PC" value={l.pcMode} options={MODE_OPTS} onChange={(v) => setLaunch({ pcMode: v }, `PC sessions: ${modeName(v)}`)} />
           </SettingRow>
@@ -103,12 +103,12 @@ export function NewSessionsSection({ s, patch }: { s: SettingsT; patch: PatchFn 
                 <Monitor size={15} className="faint" aria-hidden="true" /> Started from this computer
               </span>
             }
-            hint="Sessions run in the background (claude --bg). Terminal tabs need WSL2 and Windows Terminal."
+            hint="Sessions run in the background (claude --bg): no terminal window can be opened here (no graphical session, or PILOTAGE_TERMINAL=none)."
           >
             <span className="small muted">Background</span>
           </SettingRow>
         )}
-        {wsl && (
+        {term && (
           <SettingRow
             label={
               <span className="row" style={{ gap: 8 }}>

@@ -283,8 +283,11 @@ export type Bootstrap = {
   settings: Settings;
   /** The name in use (settings.profile.name, else detected from git config / $USER). */
   user?: { name: string; detectedName: string };
-  /** wsl: WSL2 + Windows, where Windows Terminal, VS Code / Explorer on the PC and the phone forwarder work. */
-  platform?: { wsl: boolean; os: string };
+  /**
+   * wsl: WSL2 + Windows, where VS Code / Explorer on the PC and the phone forwarder work.
+   * terminal: where sessions open ("Windows Terminal", "Terminal", "kitty"…), null = background only.
+   */
+  platform?: { wsl: boolean; os: string; terminal?: string | null };
   home: string;
   usage: Usage;
   index: IndexProgress;
@@ -304,6 +307,8 @@ export type Launch = {
   error: string | null;
   note?: string;
   detail?: string;
+  /** The terminal it opened in ("Windows Terminal", "Terminal"…). */
+  terminal?: string | null;
   createdAt: number;
 };
 

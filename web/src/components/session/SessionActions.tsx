@@ -2,7 +2,7 @@
 // resume command (Codex / Gemini). One primary button in the header (a floating pill on the phone); the rest in ⋯.
 import React from 'react';
 import { Copy, GitFork, Monitor, MoreHorizontal, Play, Smartphone, Square, Terminal } from 'lucide-react';
-import { api, useInvalidate, useWsl } from '../../api';
+import { api, terminalPlace, useInvalidate, useTerminal } from '../../api';
 import { useApp } from '../AppContext';
 import { IconButton, useToast } from '../ui';
 import { Menu, type MenuEntry } from '../project/Menu';
@@ -29,7 +29,7 @@ export function useSessionActions(s: SessionDetail): ActionSet {
   const { openNewSession } = useApp();
   const toast = useToast();
   const inv = useInvalidate();
-  const wsl = useWsl();
+  const term = useTerminal();
   const harness = harnessOf(s);
   const copyResume: SessionAction = {
     key: 'copy',
@@ -43,16 +43,16 @@ export function useSessionActions(s: SessionDetail): ActionSet {
   const l = s.live;
   if (l) {
     const secondary: SessionAction[] = [];
-    if (l.kind === 'background' && l.bgId && wsl) {
+    if (l.kind === 'background' && l.bgId && term) {
       secondary.push({
         key: 'attach',
         label: 'Attach on PC',
         icon: <Monitor />,
         desktopOnly: true,
-        title: 'Open this background session in a Windows Terminal tab',
+        title: `Open this background session in ${terminalPlace(term)}`,
         onClick: () =>
           api(`/api/sessions/${s.id}/attach`, { method: 'POST' })
-            .then(() => toast('Opened in Windows Terminal'))
+            .then(() => toast(`Opened in ${term}`))
             .catch((e) => toast(e.message, true)),
       });
     }
@@ -96,8 +96,8 @@ export function useSessionActions(s: SessionDetail): ActionSet {
     };
   }
 
-  if (harness === 'codex' && !wsl) {
-    // No Windows Terminal to open it in: the resume command is the way back in.
+  if (harness === 'codex' && !term) {
+    // No terminal to open it in: the resume command is the way back in.
     return { primary: { ...copyResume, short: 'Copy command' }, secondary: [], note: 'Resume it with this command in a terminal' };
   }
 
@@ -107,12 +107,12 @@ export function useSessionActions(s: SessionDetail): ActionSet {
         key: 'resume-codex',
         label: 'Resume on PC',
         icon: <Terminal />,
-        title: 'Opens Codex in a Windows Terminal tab on your PC and resumes this session',
+        title: `Opens Codex in ${terminalPlace(term)} on your PC and resumes this session`,
         onClick: () => {
-          if (!confirm('Open Codex in a Windows Terminal tab on your PC and resume this session?')) return;
+          if (!confirm(`Open Codex in ${terminalPlace(term)} on your PC and resume this session?`)) return;
           api<{ note?: string; error?: string | null }>('/api/launch', { method: 'POST', body: { resumeId: s.id, mode: 'terminal', harness: 'codex' } })
             .then((r) => {
-              toast(r?.note || 'Codex opened in Windows Terminal');
+              toast(r?.note || `Codex opened in ${term}`);
               inv('live', 'overview');
             })
             .catch((e) => toast(e.message, true));

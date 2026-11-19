@@ -5,7 +5,7 @@ import { createPortal } from 'react-dom';
 import { Link, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Bot, Check, CheckCircle2, Cloud, CornerDownRight, ExternalLink, Hourglass, Monitor, MoreHorizontal, Play, RotateCcw, Smartphone, Sparkles, Sun, SunDim, Trash2, TriangleAlert, Undo2, User, X } from 'lucide-react';
-import { api, useBootstrap, useProjects, useWsl } from '../../api';
+import { api, terminalPlace, useBootstrap, useProjects, useTerminal } from '../../api';
 import { Button, CopyButton, IconButton, Meta, Modal, ProjectGlyph, SegmentedControl, Spinner, StatusIcon, Switch } from '../ui';
 import type { Launch, ProjectSummary } from '../../types';
 import type { WorkItem, WorkStatus } from '../../types-extra';
@@ -566,11 +566,11 @@ export function LaunchProgress({ launch, onClose }: { launch: Launch; onClose: (
     <div className="launch-state">
       <div className={`launch-icon${ready ? ' ok' : ''}`}>{ready ? <CheckCircle2 size={26} /> : <Spinner size={24} />}</div>
       <div className="stack" style={{ gap: 6 }}>
-        <div className="launch-title">{ready ? `“${l.name}” is running` : l.mode === 'terminal' ? 'Opening a terminal tab on your PC…' : 'Starting in the background…'}</div>
+        <div className="launch-title">{ready ? `“${l.name}” is running` : l.mode === 'terminal' ? `Opening ${terminalPlace(l.terminal ?? null)} on your PC…` : 'Starting in the background…'}</div>
         <div className="small muted readable" style={{ margin: '0 auto' }}>
           {ready
             ? l.mode === 'terminal'
-              ? 'It is open in Windows Terminal, and you can continue it from your phone.'
+              ? `It is open in ${l.terminal || 'a terminal'}, and you can continue it from your phone.`
               : 'It runs on your PC without a window. Continue it in the Claude app.'
             : l.note || l.detail || 'Waiting for Claude to connect Remote Control…'}
         </div>
@@ -711,10 +711,10 @@ export function TaskSheet({ it, onClose }: { it: WorkItem; onClose: () => void }
   const { data: projects } = useProjects();
   const { data: boot } = useBootstrap();
   const phone = boot?.device.isPhone ?? isPhone();
-  const wsl = useWsl(); // no Windows Terminal outside WSL2 + Windows: background only
+  const term = useTerminal(); // no terminal on this PC: background only
   const [stage, setStage] = useState<'edit' | 'start' | 'launch'>('edit');
   const [mode, setMode] = useState<'terminal' | 'background'>(
-    (!wsl ? 'background' : (phone ? boot?.settings.launch.phoneMode : boot?.settings.launch.pcMode) || (phone ? 'background' : 'terminal')) as 'terminal' | 'background',
+    (!term ? 'background' : (phone ? boot?.settings.launch.phoneMode : boot?.settings.launch.pcMode) || (phone ? 'background' : 'terminal')) as 'terminal' | 'background',
   );
   const [resume, setResume] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -915,13 +915,13 @@ export function TaskSheet({ it, onClose }: { it: WorkItem; onClose: () => void }
               <div className="medium">{it.title}</div>
               <div className="tiny faint">Claude gets the title and details as its first prompt, and is asked to check in before anything risky.</div>
             </div>
-            {wsl && (
+            {term && (
               <div className="field">
                 <label>Where</label>
                 <div className="choice-grid" role="radiogroup" aria-label="Where">
                   {(
                     [
-                      { value: 'terminal', icon: <Monitor size={17} />, title: 'Terminal on PC', hint: 'A Windows Terminal tab with Remote Control, so it also shows on your phone.' },
+                      { value: 'terminal', icon: <Monitor size={17} />, title: 'Terminal on PC', hint: `${terminalPlace(term, true)} with Remote Control, so it also shows on your phone.` },
                       { value: 'background', icon: <Cloud size={17} />, title: 'Background', hint: 'No window on the PC. Continue it in the Claude app.' },
                     ] as const
                   ).map((o) => (

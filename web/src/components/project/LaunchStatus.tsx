@@ -3,7 +3,7 @@ import React from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { CheckCircle2, ExternalLink, Smartphone, TriangleAlert } from 'lucide-react';
-import { api } from '../../api';
+import { api, terminalPlace } from '../../api';
 import type { Launch } from '../../types';
 import type { LaunchRecord } from '../../types-extra';
 import { Callout, CopyButton, Spinner } from '../ui';
@@ -38,10 +38,10 @@ export function LaunchStatus({ launch, compact = false, onNavigate }: { launch: 
       View in Pilotage
     </Link>
   ) : null;
-  const title = ready ? `“${l.name}” is running` : timedOut ? 'Still starting' : l.mode === 'terminal' ? 'Opening a terminal tab on your PC…' : 'Starting in the background…';
+  const title = ready ? `“${l.name}” is running` : timedOut ? 'Still starting' : l.mode === 'terminal' ? `Opening ${terminalPlace((l as Launch).terminal ?? null)} on your PC…` : 'Starting in the background…';
   const body = ready
     ? l.mode === 'terminal'
-      ? 'It is open in Windows Terminal, and you can continue it from your phone.'
+      ? `It is open in ${(l as Launch).terminal || 'a terminal'}, and you can continue it from your phone.`
       : 'It runs on your PC without a window. Continue it in the Claude app.'
     : timedOut
       ? 'No phone link yet. It may still be connecting; check Sessions in a moment.'

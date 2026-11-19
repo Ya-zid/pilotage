@@ -49,3 +49,36 @@ jobs:
       - name: Build the web app
         working-directory: web
         run: npx vite build
+
+  # The npm package as users get it (npm pack → global install → start), on Linux and macOS. On macOS the tests also
+  # open the real Terminal.app once (with a fake claude) and the smoke test installs and removes the LaunchAgent.
+  package:
+    name: npm package (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci && npm ci --prefix web
+
+      - name: Server tests (macOS)
+        if: runner.os == 'macOS'
+        run: npm test
+        env:
+          PILOTAGE_TEST_TERMINAL_APP: '1'
+
+      - name: Pack, install and run the package
+        run: bash scripts/smoke-npm.sh

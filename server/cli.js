@@ -94,7 +94,7 @@ try {
     const { projects } = await api('/api/projects?hidden=1');
     const p = findProject(projects, target);
     const rec = await api('/api/launch', { method: 'POST', body: { projectId: p.id, mode, model, name: name || undefined, prompt: rest.join(' ') } });
-    process.stdout.write(`Starting "${rec.name}" in ${p.displayPath} (${rec.mode === 'terminal' ? 'Windows Terminal tab' : 'background'})`);
+    process.stdout.write(`Starting "${rec.name}" in ${p.displayPath} (${rec.mode === 'terminal' ? rec.terminal || 'terminal' : 'background'})`);
     let l = rec;
     for (let i = 0; i < 40 && !l.bridgeUrl && l.state !== 'error'; i++) {
       await new Promise((r) => setTimeout(r, 1500));

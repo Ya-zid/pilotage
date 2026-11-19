@@ -99,7 +99,8 @@ scripts/demo/stop-demo.sh          # stop it
 
 The demo server runs with an empty environment and a fake home folder: nothing from your shell, `~/.claude`,
 `~/.codex` or git config reaches it, it makes no AI calls, and your own Pilotage is not touched.
-`scripts/demo/shoot.mjs` takes the screenshots in `docs/images` (it needs Playwright).
+`scripts/demo/shoot.mjs` takes the screenshots in `docs/images` and `scripts/demo/record.mjs` records the README GIF
+(both need Playwright; the GIF also needs Pillow).
 
 ## Where things live
 
@@ -118,7 +119,8 @@ server/                 Node server (ES modules, no framework)
   views.js              read model: everything the web app renders
   auth.js               pairing, device cookies, Host allow-list, rate limits
   store.js              settings and state (data/state.json), atomic writes, daily backups
-  launch.js             starting and resuming sessions (Windows Terminal, or claude --bg)
+  launch.js             starting and resuming sessions (a terminal tab or window, or claude --bg)
+  terminal.js           which terminal to open: Windows Terminal (WSL), Terminal.app (macOS), a Linux emulator
   net.js  tls.js        phone access (forwarder, firewall rule, direct bind); phone HTTPS (local CA)
   config.js             paths, ports, platform detection (IS_WSL)
   profile.js            the user's name (settings.profile.name)

@@ -70,6 +70,18 @@ export const queryClient = new QueryClient({
 export const useBootstrap = () => useQuery({ queryKey: ['bootstrap'], queryFn: () => api<Bootstrap>('/api/bootstrap'), staleTime: 60_000 });
 /** WSL2 + Windows: Windows Terminal tabs, "Attach on PC" and the phone forwarder exist (true until the server says otherwise). */
 export const useWsl = () => useBootstrap().data?.platform?.wsl !== false;
+/**
+ * Where sessions open on the PC ("Windows Terminal", "Terminal", "kitty"…), or null when they can only run in the
+ * background (no graphical session, PILOTAGE_TERMINAL=none). A generic name until the server answers.
+ */
+export const useTerminal = (): string | null => {
+  const p = useBootstrap().data?.platform;
+  if (!p) return 'Terminal';
+  return p.terminal !== undefined ? p.terminal : p.wsl ? 'Windows Terminal' : null;
+};
+/** "a Windows Terminal tab" on WSL, "a Terminal window" elsewhere ("A …" with cap). */
+export const terminalPlace = (label: string | null, cap = false) =>
+  `${cap ? 'A' : 'a'} ${label === 'Windows Terminal' ? 'Windows Terminal tab' : `${label || 'terminal'} window`}`;
 export const useOverview = () => useQuery({ queryKey: ['overview'], queryFn: () => api<Overview>('/api/overview') });
 export const useProjects = (hidden = false) =>
   useQuery({ queryKey: ['projects', hidden], queryFn: () => api<{ projects: ProjectSummary[] }>(`/api/projects${hidden ? '?hidden=1' : ''}`).then((r) => (registerWorkspaces(r.projects.map((p) => p.workspace)), r.projects)) });

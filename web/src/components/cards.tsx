@@ -6,7 +6,7 @@ import { AlertTriangle, Bot, Cloud, CornerDownRight, ExternalLink, GitBranch, In
 import type { AttentionItem, BlockView, ProjectSummary, SessionSummary } from '../types';
 import { Dot, LiveStatus, Meta, ProjectGlyph, Snippet, StatusIcon, WorkStatus, statusInfo, useToast } from './ui';
 import { useApp } from './AppContext';
-import { api, useInvalidate, useOverview, useWsl } from '../api';
+import { api, useInvalidate, useOverview, useTerminal } from '../api';
 import { ago, fmtDate, wsColor, shortModel, plural } from '../util';
 import './cards.css';
 
@@ -229,7 +229,7 @@ export function SessionRow({ s, showProject = true }: { s: SessionSummary; showP
 export function LiveCard({ s }: { s: SessionSummary }) {
   const toast = useToast();
   const inv = useInvalidate();
-  const wsl = useWsl();
+  const term = useTerminal();
   const l = s.live!;
   const st = liveState(s) || 'idle_live';
   return (
@@ -274,12 +274,12 @@ export function LiveCard({ s }: { s: SessionSummary }) {
         {l.kind === 'background' && l.bgId && (
           <>
             <span className="grow" />
-            {wsl && (
+            {term && (
               <button
                 className="btn sm ghost hide-mobile"
                 onClick={() =>
                   api(`/api/sessions/${s.id}/attach`, { method: 'POST' })
-                    .then(() => toast('Opened in Windows Terminal'))
+                    .then(() => toast(`Opened in ${term}`))
                     .catch((e) => toast(e.message, true))
                 }
               >

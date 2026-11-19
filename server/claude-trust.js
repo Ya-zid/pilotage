@@ -39,17 +39,20 @@ function readConfig(file = CLAUDE_CONFIG) {
 
 /** Is `dir` trusted in Claude Code? {trusted, via: the folder whose answer counts, home: dir is the home folder}. */
 export function trustState(dir, { file = CLAUDE_CONFIG, home = HOME } = {}) {
-  const realHome = realOr(home);
-  const real = realOr(dir);
-  if (real === realHome) return { trusted: false, via: null, home: true };
+  const homes = new Set([path.resolve(home), realOr(home)]);
+  // Claude Code records a folder as its process saw it, usually the real path; a symlinked folder (macOS temp folders
+  // live under /var -> /private/var) has two spellings, so the parents of both are checked.
+  const starts = [...new Set([path.resolve(dir), realOr(dir)])];
+  if (starts.some((d) => homes.has(d))) return { trusted: false, via: null, home: true };
   const projects = readConfig(file)?.projects || {};
   const ok = (p) => projects[p] && typeof projects[p] === 'object' && projects[p].hasTrustDialogAccepted === true;
-  if (ok(dir)) return { trusted: true, via: dir, home: false };
-  for (let d = real; ; ) {
-    if (d !== realHome && ok(d)) return { trusted: true, via: d, home: false };
-    const up = path.dirname(d);
-    if (up === d) break;
-    d = up;
+  for (const start of starts) {
+    for (let d = start; ; ) {
+      if (!homes.has(d) && ok(d)) return { trusted: true, via: d, home: false };
+      const up = path.dirname(d);
+      if (up === d) break;
+      d = up;
+    }
   }
   return { trusted: false, via: null, home: false };
 }

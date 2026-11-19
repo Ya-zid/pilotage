@@ -260,3 +260,16 @@ test('usage: keeps the highest reading per window, so per-model weekly limits do
   assert.equal(recordReading({ f: { pct: 50, resetsAt: now + 1000, at: now - 1000 } }, {}, 30 * 60e3, now + 31 * 60e3), null); // 5-hour readings must be fresh
   assert.equal(recordReading({ x: { pct: 90, resetsAt: now - 1, at: now - 5 } }, {}, keep, now), null); // window over
 });
+
+test('data folder: a git clone keeps <clone>/data, an npm install uses ~/.pilotage', async () => {
+  const { defaultDataDir } = await import('../server/config.js');
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'pilotage-datadir-'));
+  const clone = path.join(base, 'clone');
+  fs.mkdirSync(path.join(clone, '.git'), { recursive: true });
+  const pkg = path.join(base, 'lib', 'node_modules', 'pilotage-cli');
+  fs.mkdirSync(pkg, { recursive: true });
+  assert.equal(defaultDataDir(clone, '/home/u'), path.join(clone, 'data'));
+  assert.equal(defaultDataDir(pkg, '/home/u'), '/home/u/.pilotage');
+  fs.mkdirSync(path.join(pkg, 'data'));
+  assert.equal(defaultDataDir(pkg, '/home/u'), path.join(pkg, 'data'), 'an existing data folder is kept');
+});

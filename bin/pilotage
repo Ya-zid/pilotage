@@ -1,14 +1,36 @@
 #!/usr/bin/env bash
-# pilotage — control the Pilotage dashboard (serves http://localhost:4747; WSL2 + Windows gets the full feature set).
+# pilotage — control the Pilotage dashboard (serves http://localhost:4747).
 #
+#   pilotage            start Pilotage if needed and open it in your browser (same as: pilotage open)
 #   pilotage start | stop | restart | status | open | pair | phone | logs | build | run | rotate-key | version
 #   pilotage projects [filter] | live | new <project> [--bg] [--model m] [--name n] ["first prompt"]
-#   pilotage install    (`pilotage` on PATH; on WSL also autostart at Windows login + Desktop shortcut)
-#   pilotage uninstall  (removes all of that; keeps data/ unless --purge)
+#   pilotage install    (autostart at login: Windows Startup + Desktop shortcut on WSL, a LaunchAgent on macOS)
+#   pilotage uninstall  (removes all of that; keeps your data unless --purge)
 set -uo pipefail
 
-ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
-DATA="${PILOTAGE_DATA:-$ROOT/data}"
+# This script's real folder, following symlinks (npm links it into a bin folder). Portable: macOS readlink has no -f
+# before macOS 12.3.
+resolve_dir() {
+  local p="$1" d
+  while [ -L "$p" ]; do
+    d="$(cd -P "$(dirname "$p")" && pwd)"
+    p="$(readlink "$p")"
+    case "$p" in /*) ;; *) p="$d/$p" ;; esac
+  done
+  cd -P "$(dirname "$p")" && pwd
+}
+ROOT="$(cd "$(resolve_dir "${BASH_SOURCE[0]}")/.." && pwd)"
+# Data: a git clone keeps <clone>/data; an npm install (node_modules is replaced on update) uses ~/.pilotage.
+# The server applies the same rule (server/config.js); passing it on makes sure both agree.
+if [ -n "${PILOTAGE_DATA:-}" ]; then DATA="$PILOTAGE_DATA"
+elif [ -e "$ROOT/.git" ] || [ -d "$ROOT/data" ]; then DATA="$ROOT/data"
+else DATA="$HOME/.pilotage"; fi
+export PILOTAGE_DATA="$DATA"
+FROM_NPM=0; case "$ROOT" in */node_modules/*) FROM_NPM=1 ;; esac
+FROM_NPX=0; case "$ROOT" in */_npx/*) FROM_NPX=1 ;; esac
+IS_MAC=0; [ "$(uname -s)" = Darwin ] && IS_MAC=1
+LA_LABEL="local.pilotage"
+LA_PLIST="$HOME/Library/LaunchAgents/$LA_LABEL.plist"
 PORT="${PILOTAGE_PORT:-4747}"
 LOG="$DATA/logs/server.log"
 PIDFILE="$DATA/pilotage.pid"
@@ -43,6 +65,8 @@ say() { printf '%s\n' "$*"; }
 
 need_node() { [ -n "$NODE" ] || { say "${c_red}Node.js 22+ not found (install it with nvm, or set PILOTAGE_NODE=/path/to/node).${c_off}"; exit 1; }; }
 need_wsl() { [ "$IS_WSL" = 1 ] || { say "$1 needs WSL2 + Windows. Not available on this system."; exit 1; }; }
+now_iso() { date '+%Y-%m-%dT%H:%M:%S%z'; }
+xml_escape() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
 
 healthy() { curl -fsS -m 2 "http://127.0.0.1:$PORT/healthz" 2>/dev/null | grep -q pilotage; }
 
@@ -96,7 +120,7 @@ cmd_run() {
   while true; do
     if [ -f "$STOPFLAG" ] || healthy; then sleep 20; continue; fi
     rotate_log
-    echo "$(date -Is) [supervisor] starting server" >>"$LOG"
+    echo "$(now_iso) [supervisor] starting server" >>"$LOG"
     local t0; t0=$(date +%s)
     ( cd "$ROOT" && "$NODE" "$ROOT/server/index.js" >>"$LOG" 2>&1 < /dev/null )
     if [ $(( $(date +%s) - t0 )) -lt 30 ]; then fails=$((fails + 1)); else fails=0; fi
@@ -111,7 +135,10 @@ cmd_status() {
     say "${c_red}●${c_off} Pilotage is not running  ${c_dim}(pilotage start)${c_off}"
   fi
   if [ "$IS_WSL" != 1 ]; then
-    say "${c_dim}● Phone forwarder, firewall rule and autostart: WSL2 + Windows only${c_off}"
+    if [ "$IS_MAC" = 1 ]; then
+      [ -f "$LA_PLIST" ] && say "${c_green}●${c_off} Starts automatically at login" || say "${c_dim}● Autostart not installed (pilotage install)${c_off}"
+    fi
+    say "${c_dim}● Phone access: see docs/PHONE.md (PILOTAGE_LAN_BIND)${c_off}"
     return 0
   fi
   local hb="$WIN_DIR/forwarder.json"
@@ -161,12 +188,20 @@ cmd_open() {
     local opener=xdg-open; [ "$(uname -s)" = Darwin ] && opener=open
     if command -v "$opener" >/dev/null 2>&1 && "$opener" "$url" >/dev/null 2>&1; then say "Opened Pilotage in your browser."
     else say "Open this one-time login link in a browser on this computer (valid a few minutes):"; say "  $url"; fi
+    npx_hint
     return 0
   fi
   # Hand the link to the default browser. explorer.exe is not reliable for URLs (on some PCs it opens Documents).
   ( cd /mnt/c && /mnt/c/Windows/System32/rundll32.exe url.dll,FileProtocolHandler "$url" ) >/dev/null 2>&1 \
     || ( cd /mnt/c && /mnt/c/Windows/System32/cmd.exe /c start "" "$url" ) >/dev/null 2>&1 || true
   say "Opened Pilotage in your Windows browser."
+  npx_hint
+}
+
+# Started with npx: the copy lives in npm's cache, which can be cleared. Say how to keep it.
+npx_hint() {
+  [ "$FROM_NPX" = 1 ] || return 0
+  say "${c_dim}To keep Pilotage (and start it at login): npm install -g pilotage-cli && pilotage install${c_off}"
 }
 
 cmd_pair() {
@@ -207,17 +242,74 @@ cmd_build() {
   ( cd "$ROOT/web" && PATH="$(dirname "$NODE"):$PATH" npm run build --silent ) || { say "${c_red}Build failed${c_off}"; return 1; }
 }
 
+# Other PILOTAGE_* settings in this shell (PILOTAGE_LAN_BIND, PILOTAGE_PORT…) as plist entries: launchd won't see them.
+pilotage_env_xml() {
+  local name
+  for name in $(env | sed -n 's/^\(PILOTAGE_[A-Z0-9_]*\)=.*/\1/p' | sort -u); do
+    case "$name" in PILOTAGE_NODE|PILOTAGE_DATA) continue ;; esac
+    printf '    <key>%s</key><string>%s</string>\n' "$name" "$(xml_escape "${!name}")"
+  done
+}
+
+# macOS: a LaunchAgent runs the supervisor (pilotage run) at login. launchd starts it with a bare PATH, so the plist
+# names the node found now and the usual install folders (Homebrew, ~/.local/bin for claude).
+install_launch_agent() {
+  local uid; uid="$(id -u)"
+  mkdir -p "$HOME/Library/LaunchAgents" "$DATA/logs"
+  local path_env="$(dirname "$NODE"):$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+  cat >"$LA_PLIST" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Pilotage: starts the local dashboard at login. Remove with "pilotage uninstall". -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>$LA_LABEL</string>
+  <key>ProgramArguments</key>
+  <array><string>$(xml_escape "$ROOT/bin/pilotage")</string><string>run</string></array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>$(xml_escape "$path_env")</string>
+    <key>PILOTAGE_NODE</key><string>$(xml_escape "$NODE")</string>
+    <key>PILOTAGE_DATA</key><string>$(xml_escape "$DATA")</string>
+$(pilotage_env_xml)
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>StandardOutPath</key><string>$(xml_escape "$DATA/logs/launchd.log")</string>
+  <key>StandardErrorPath</key><string>$(xml_escape "$DATA/logs/launchd.log")</string>
+</dict>
+</plist>
+PLIST
+  launchctl bootout "gui/$uid/$LA_LABEL" >/dev/null 2>&1 || true
+  if launchctl bootstrap "gui/$uid" "$LA_PLIST" >/dev/null 2>&1; then
+    say "• Autostart: ~/Library/LaunchAgents/$LA_LABEL.plist (starts at login)"
+    for _ in $(seq 1 40); do healthy && break; sleep 0.25; done
+  else
+    say "• Autostart: written to ~/Library/LaunchAgents/$LA_LABEL.plist; it takes effect at your next login"
+  fi
+}
+
 cmd_install() {
   need_node
-  mkdir -p "$HOME/.local/bin"
-  ln -sfn "$ROOT/bin/pilotage" "$HOME/.local/bin/pilotage"
-  say "• Command:   pilotage  (linked in ~/.local/bin)"
+  if [ "$FROM_NPX" = 1 ]; then
+    say "This copy runs from npm's cache (npx), which can be cleared. Install it first, then run install again:"
+    say "  npm install -g pilotage-cli && pilotage install"
+    exit 1
+  fi
+  if [ "$FROM_NPM" = 1 ]; then
+    say "• Command:   pilotage  (installed by npm)"
+  else
+    mkdir -p "$HOME/.local/bin"
+    ln -sfn "$ROOT/bin/pilotage" "$HOME/.local/bin/pilotage"
+    say "• Command:   pilotage  (linked in ~/.local/bin)"
+  fi
   if [ "$IS_WSL" != 1 ]; then
-    say "• Not on WSL2 + Windows, so these are skipped:"
-    say "    - autostart at login (start it from your own startup: e.g. a systemd user unit or launchd job running \"$ROOT/bin/pilotage run\")"
-    say "    - the Desktop shortcut (use: pilotage open)"
-    say "    - the Windows phone forwarder and its firewall rule (see docs/PHONE.md)"
-    say "    - Windows Terminal launches (sessions started from Pilotage run in the background: claude --bg)"
+    if [ "$IS_MAC" = 1 ]; then
+      install_launch_agent
+    else
+      say "• Autostart at login is not set up on Linux: add \"$ROOT/bin/pilotage run\" to your startup (e.g. a systemd user unit)."
+    fi
+    say "• Phone access: see docs/PHONE.md (PILOTAGE_LAN_BIND)"
+    say "• Open it any time: pilotage"
     cmd_start
     return
   fi
@@ -249,12 +341,23 @@ VBS
   cmd_start
 }
 
+uninstall_done() {
+  [ "$FROM_NPM" = 1 ] && say "To remove the program itself: npm uninstall -g pilotage-cli"
+  if [ "${1:-}" = "--purge" ]; then rm -rf "$DATA"; say "Deleted $DATA."; else say "Your Pilotage data is kept in $DATA (delete with: pilotage uninstall --purge)."; fi
+}
+
 cmd_uninstall() {
-  [ -L "$HOME/.local/bin/pilotage" ] && rm -f "$HOME/.local/bin/pilotage"
+  local linked=0
+  if [ -L "$HOME/.local/bin/pilotage" ]; then rm -f "$HOME/.local/bin/pilotage"; linked=1; fi
   if [ "$IS_WSL" != 1 ] || [ -z "$WIN_HOME" ]; then
+    if [ "$IS_MAC" = 1 ] && [ -f "$LA_PLIST" ]; then
+      launchctl bootout "gui/$(id -u)/$LA_LABEL" >/dev/null 2>&1 || true
+      rm -f "$LA_PLIST"
+      say "Removed the login item (LaunchAgent)."
+    fi
     cmd_stop
-    say "Removed the pilotage command."
-    if [ "${1:-}" = "--purge" ]; then rm -rf "$DATA"; say "Deleted $DATA."; else say "Your Pilotage data is kept in $DATA (delete with: pilotage uninstall --purge)."; fi
+    [ "$linked" = 1 ] && say "Removed the pilotage command from ~/.local/bin."
+    uninstall_done "${1:-}"
     return
   fi
   rm -f "$STARTUP_VBS" "$DESKTOP_URL" "$DESKTOP_LNK"
@@ -270,10 +373,10 @@ cmd_uninstall() {
     /mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -Command "Start-Process -Verb RunAs -FilePath netsh.exe -ArgumentList 'advfirewall','firewall','delete','rule','name=\"Pilotage phone access\"'" >/dev/null 2>&1 || say "Could not remove it; run as admin: netsh advfirewall firewall delete rule name=\"Pilotage phone access\""
   fi
   say "Removed autostart, Desktop shortcut, phone forwarder and the pilotage command."
-  if [ "${1:-}" = "--purge" ]; then rm -rf "$DATA"; say "Deleted $DATA."; else say "Your Pilotage data is kept in $DATA (delete with: pilotage uninstall --purge)."; fi
+  uninstall_done "${1:-}"
 }
 
-case "${1:-status}" in
+case "${1:-open}" in
   start) cmd_start ;;
   stop) cmd_stop ;;
   restart) cmd_stop >/dev/null; rm -f "$STOPFLAG"; sleep 0.5; cmd_start ;;
@@ -292,6 +395,6 @@ case "${1:-status}" in
   run) cmd_run ;;
   install) cmd_install ;;
   uninstall) shift; cmd_uninstall "${1:-}" ;;
-  -h|--help|help) sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//' ;;
-  *) say "Unknown command: $1"; sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+  -h|--help|help) sed -n '2,8p' "$ROOT/bin/pilotage" | sed 's/^# \{0,1\}//' ;;
+  *) say "Unknown command: $1"; sed -n '2,8p' "$ROOT/bin/pilotage" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac
