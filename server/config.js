@@ -34,7 +34,16 @@ function detectWsl() {
 export const IS_WSL = detectWsl();
 /** 'wsl' | 'linux' | 'darwin' | … (process.platform outside WSL). */
 export const OS_NAME = IS_WSL ? 'wsl' : process.platform;
-export const DATA = process.env.PILOTAGE_DATA || path.join(ROOT, 'data');
+/**
+ * Where Pilotage keeps its state, keys and caches. A git clone keeps using <clone>/data (as before); an npm install
+ * lives in node_modules, which updates replace and npx caches get cleared, so it uses ~/.pilotage.
+ * bin/pilotage applies the same rule and passes it on as PILOTAGE_DATA.
+ */
+export function defaultDataDir(root = ROOT, home = os.homedir()) {
+  if (fs.existsSync(path.join(root, '.git')) || fs.existsSync(path.join(root, 'data'))) return path.join(root, 'data');
+  return path.join(home, '.pilotage');
+}
+export const DATA = process.env.PILOTAGE_DATA || defaultDataDir();
 export const WEB_DIST = process.env.PILOTAGE_WEB_DIST || path.join(ROOT, 'web', 'dist'); // override: preview builds
 export const PORT = Number(process.env.PILOTAGE_PORT || 4747);
 /** Port the Windows-side forwarder listens on (Wi-Fi / NetBird). */

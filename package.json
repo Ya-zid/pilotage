@@ -1,6 +1,6 @@
 {
-  "name": "pilotage",
-  "version": "0.2.0",
+  "name": "pilotage-cli",
+  "version": "0.3.0",
   "description": "A local web cockpit for your Claude Code (and Codex / Gemini CLI) sessions: projects, live sessions, AI summaries, tasks, phone access.",
   "keywords": [
     "claude-code",
@@ -10,7 +10,9 @@
     "ai-coding",
     "dashboard",
     "developer-tools",
-    "wsl"
+    "wsl",
+    "macos",
+    "linux"
   ],
   "author": "Yazid Slimani",
   "license": "MIT",
@@ -20,6 +22,18 @@
   },
   "homepage": "https://github.com/Ya-zid/pilotage#readme",
   "bugs": { "url": "https://github.com/Ya-zid/pilotage/issues" },
+  "bin": {
+    "pilotage": "bin/pilotage"
+  },
+  "files": [
+    "bin/",
+    "server/",
+    "web/dist/",
+    "windows/",
+    "docs/PHONE.md",
+    "SECURITY.md",
+    "CHANGELOG.md"
+  ],
   "engines": {
     "node": ">=22"
   },
@@ -30,11 +44,11 @@
     "start": "node server/index.js",
     "build": "npm --prefix web run build",
     "test": "node --test tests/*.test.js",
-    "leak-scan": "bash scripts/leak-scan.sh"
+    "leak-scan": "bash scripts/leak-scan.sh",
+    "prepack": "test ! -e server/local-workspaces.json || { echo 'server/local-workspaces.json is personal: pack from a clean clone'; exit 1; }; npm --prefix web run build"
   },
   "dependencies": {
     "qrcode": "^1.5.4"
   },
-  "type": "module",
-  "private": true
+  "type": "module"
 }

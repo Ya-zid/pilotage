@@ -123,7 +123,8 @@ PILOTAGE_LAN_BIND=0.0.0.0 pilotage restart     # or: PILOTAGE_LAN_BIND=0.0.0.0 n
 
 The phone listener then binds `0.0.0.0:4748` directly (`PILOTAGE_LAN_PORT` changes the port; you can also bind one
 address, e.g. your VPN IP). To keep it on, export the variable in your shell profile (`~/.bashrc`, `~/.zshrc`) so
-every start sees it. Each connection is checked against an allow-list before anything is read:
+every start sees it. On macOS, run `pilotage install` again after setting it: the login item copies the `PILOTAGE_*`
+variables of the shell it was installed from. Each connection is checked against an allow-list before anything is read:
 
 | `PILOTAGE_LAN_ALLOW` | Allowed |
 | --- | --- |

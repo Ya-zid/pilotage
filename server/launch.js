@@ -1,11 +1,12 @@
-// Starting / resuming Claude sessions, and opening folders on the Windows side.
-// Terminal launches (WSL2 + Windows Terminal) use this pattern:
-//   wt.exe -w 0 new-tab --title T wsl.exe -d Ubuntu --cd DIR -- bash -l SCRIPT
-// where SCRIPT runs `claude --remote-control NAME ...` so the session shows up in the
-// Claude app on the user's phone too. Outside WSL, terminal launches fall back to background mode (`claude --bg`).
-// Other harnesses (opts.harness = 'codex' | 'gemini') use the same Windows Terminal path with their own CLI
+// Starting / resuming Claude sessions, and opening folders on the PC.
+// A terminal launch writes a SCRIPT that runs `claude --remote-control NAME ...` (so the session shows up in the
+// Claude app on the user's phone too) and opens it in a terminal (terminal.js):
+//   WSL2 + Windows: wt.exe -w 0 new-tab --title T wsl.exe -d Ubuntu --cd DIR -- bash -l SCRIPT
+//   macOS: open -a Terminal SCRIPT.command      Linux: <terminal emulator> -e bash -l SCRIPT
+// With no terminal to open (SSH, headless, PILOTAGE_TERMINAL=none), Claude sessions start in the background (`claude --bg`).
+// Other harnesses (opts.harness = 'codex' | 'gemini') use the same terminal path with their own CLI
 // (`codex [-m M] -- PROMPT`, `codex resume ID`, `gemini --prompt-interactive=PROMPT`). Background mode is Claude-only.
-// Windows Terminal splits its command line on ';' in any argument: paths with ';' are refused (assertWtSafe).
+// Windows Terminal splits its command line on ';' in any argument: paths with ';' are refused there (assertWtSafe).
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -13,6 +14,7 @@ import { CLAUDE_BIN, CLAUDE_DIR, WT_EXE, WSL_DISTRO, VSCODE_CLI, EXPLORER_EXE, C
 import { run, shq, clip, readJSONSync, log } from './util.js';
 import { bridgeUrl } from './sources/live.js';
 import { findBin } from './sources/harness/common.js';
+import { detectTerminal, openInTerminal } from './terminal.js';
 
 const SUBCOMMANDS = new Set(['agents', 'attach', 'auth', 'auto-mode', 'doctor', 'gateway', 'import', 'install', 'logs', 'mcp', 'plugin', 'plugins', 'purge', 'respawn', 'rm', 'setup-token', 'stop', 'kill', 'ultrareview', 'update', 'upgrade', 'remote-control', 'config']);
 const MODELS = new Set(['', 'opus', 'sonnet', 'haiku', 'fable', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5', 'claude-fable-5-2']);
@@ -23,6 +25,28 @@ const CODEX_SUBCOMMANDS = new Set(['exec', 'e', 'login', 'logout', 'mcp', 'mcp-s
 const SAFE_MODEL = /^[A-Za-z0-9][\w.:/@+-]{0,99}$/;
 const WT_SEMI = 'Folder path contains ";" which Windows Terminal cannot handle safely';
 const NO_WT = 'Terminal tabs need WSL2 and Windows Terminal';
+const NO_TERM = 'No terminal window can be opened on this computer';
+/** After the session ends, the window stays open on a shell (bash on WSL, the user's shell elsewhere). */
+const KEEP_OPEN = IS_WSL ? 'exec bash -l' : 'exec "${SHELL:-/bin/bash}" -l';
+
+let termCache = { at: 0, t: null };
+/** The terminal sessions open in (Windows Terminal, Terminal.app, a Linux emulator), or null. Re-checked every 30 s. */
+export function terminal() {
+  if (Date.now() - termCache.at > 30_000) termCache = { at: Date.now(), t: detectTerminal() };
+  return termCache.t;
+}
+const scriptFile = (base) => path.join(paths.launchDir, base + (terminal()?.ext || '.sh'));
+
+/** Run a launch script in a new terminal tab (WSL) or window (macOS, Linux). */
+async function openScript(script, { title, cwd }) {
+  const t = terminal();
+  if (!t) throw new Error(NO_TERM);
+  if (t.kind !== 'wt') return openInTerminal(t, script);
+  const r = await runWT(['-w', '0', 'new-tab', '--title', title, 'wsl.exe', '-d', WSL_DISTRO, '--cd', cwd, '--', 'bash', '-l', script]);
+  if (r.code !== 0) throw new Error(`wt.exe failed: ${clip(r.stderr || r.stdout, 200)}`);
+}
+/** ';' only matters to Windows Terminal. */
+const assertTermSafe = (p) => terminal()?.kind === 'wt' && assertWtSafe(p);
 /** Linux / macOS opener for folders and links (Windows uses explorer.exe from WSL). */
 const OPENER = process.platform === 'darwin' ? 'open' : 'xdg-open';
 
@@ -118,7 +142,7 @@ export function harnessScript({ cwd, name, bin, args, promptArg, promptFile = nu
     `ARGS=(${args.map(shq).join(' ')})`,
     promptFile ? `PROMPT="$(cat ${shq(promptFile)})"; rm -f ${shq(promptFile)}; "$BIN" "\${ARGS[@]}" ${promptArg('$PROMPT')}` : `"$BIN" "\${ARGS[@]}"`,
     `rm -f ${shq(script)}`,
-    'exec bash -l',
+    KEEP_OPEN,
     '',
   ].join('\n');
 }
@@ -148,8 +172,9 @@ export async function launch(opts) {
   const id = crypto.randomUUID();
   const harness = resolveHarness(opts.harness, opts.resumeId);
   let mode = opts.mode === 'background' ? 'background' : 'terminal';
-  // Outside WSL there is no Windows Terminal: Claude sessions start in the background instead (attach with `claude attach`).
-  const fallback = !IS_WSL && mode === 'terminal' && harness === 'claude';
+  // No terminal to open (SSH, headless): Claude sessions start in the background instead (attach with `claude attach`).
+  const term = terminal();
+  const fallback = !term && mode === 'terminal' && harness === 'claude';
   if (fallback) mode = 'background';
   const name = sanitizeName(opts.name, path.basename(opts.cwd));
   const model = harness === 'claude' ? (MODELS.has(opts.model || '') ? opts.model || '' : '') : harnessModel(opts.model);
@@ -173,6 +198,7 @@ export async function launch(opts) {
     bridgeUrl: null,
     error: null,
     from: opts.from || null,
+    terminal: mode === 'terminal' ? term?.label || null : null,
   };
   launches.set(id, rec);
   if (!fs.existsSync(opts.cwd)) {
@@ -183,7 +209,7 @@ export async function launch(opts) {
   if (harness !== 'claude') {
     const label = HARNESSES[harness];
     let err = null;
-    if (!IS_WSL) err = `${NO_WT}. Start ${label} yourself in a terminal: cd ${opts.cwd} && ${harness}`;
+    if (!term) err = `${NO_TERM}. Start ${label} yourself in a terminal: cd ${opts.cwd} && ${harness}`;
     else if (mode === 'background') err = `Background mode is Claude-only. Start ${label} in a terminal instead.`;
     else if (opts.fork) err = `Fork is Claude-only; ${label} sessions can be resumed, not forked.`;
     else if (harness === 'gemini' && opts.resumeId) err = 'Gemini CLI resumes by list position only, so Pilotage cannot resume a given Gemini session. Start a new one.';
@@ -199,7 +225,7 @@ export async function launch(opts) {
     else await launchBackground(rec, { prompt, permissionMode: opts.permissionMode });
     if (fallback && rec.state !== 'error') {
       rec.fallback = true;
-      rec.note = `${NO_WT}, so it runs in the background. To type in it: claude attach ${rec.bgId}`;
+      rec.note = `${NO_TERM}, so it runs in the background. To type in it: claude attach ${rec.bgId}`;
     }
   } catch (e) {
     rec.state = 'error';
@@ -209,26 +235,24 @@ export async function launch(opts) {
   return rec;
 }
 
-/** codex / gemini in a new Windows Terminal tab. Not live-tracked: the session appears once its file is written. */
+/** codex / gemini in a new terminal tab or window. Not live-tracked: the session appears once its file is written. */
 async function launchHarnessTerminal(rec, { prompt, permissionMode }) {
-  assertWtSafe(rec.cwd);
+  assertTermSafe(rec.cwd);
   const bin = findBin(rec.harness);
   if (!bin) throw new Error(`${HARNESSES[rec.harness]} not found (looked for "${rec.harness}" on PATH and next to node)`);
   const { args, promptArg } = buildHarnessCommand({ harness: rec.harness, model: rec.model, permissionMode, resumeId: rec.resumeId });
   rec.sessionId = rec.harness === 'codex' && rec.resumeId ? `codex-${rec.resumeId}` : null;
   const promptFile = prompt ? path.join(paths.launchDir, `${rec.id}.prompt`) : null;
   if (promptFile) fs.writeFileSync(promptFile, prompt, { mode: 0o600 });
-  const script = path.join(paths.launchDir, `${rec.id}.sh`);
+  const script = scriptFile(rec.id);
   fs.writeFileSync(script, harnessScript({ cwd: rec.cwd, name: rec.name, bin, args, promptArg, promptFile, script }), { mode: 0o700 });
-  const r = await runWT(['-w', '0', 'new-tab', '--title', rec.name, 'wsl.exe', '-d', WSL_DISTRO, '--cd', rec.cwd, '--', 'bash', '-l', script]);
-  if (r.code !== 0) throw new Error(`wt.exe failed: ${clip(r.stderr || r.stdout, 200)}`);
+  await openScript(script, { title: rec.name, cwd: rec.cwd });
   rec.state = 'launched';
-  rec.note = `${HARNESSES[rec.harness]} started in Windows Terminal. It shows up in Pilotage after its first prompt (not live-tracked).`;
+  rec.note = `${HARNESSES[rec.harness]} started in ${rec.terminal || 'a terminal'}. It shows up in Pilotage after its first prompt (not live-tracked).`;
 }
 
 async function launchTerminal(rec, { prompt, permissionMode }) {
-  assertWtSafe(rec.cwd);
-  if (!WT_EXE || !fs.existsSync(WT_EXE)) throw new Error('Windows Terminal (wt.exe) not found');
+  assertTermSafe(rec.cwd);
   // New sessions get an id we choose so we can find them; resumes keep their id unless forked.
   const sessionId = rec.resumeId && !rec.fork ? rec.resumeId : crypto.randomUUID();
   rec.sessionId = sessionId;
@@ -243,7 +267,7 @@ async function launchTerminal(rec, { prompt, permissionMode }) {
   } else args.push('--session-id', sessionId);
   const promptFile = path.join(paths.launchDir, `${rec.id}.prompt`);
   if (prompt) fs.writeFileSync(promptFile, prompt, { mode: 0o600 });
-  const script = path.join(paths.launchDir, `${rec.id}.sh`);
+  const script = scriptFile(rec.id);
   const lines = [
     '#!/usr/bin/env bash',
     `# Started by Pilotage on ${new Date().toISOString()}`,
@@ -255,13 +279,11 @@ async function launchTerminal(rec, { prompt, permissionMode }) {
       ? `PROMPT="$(cat ${shq(promptFile)})"; rm -f ${shq(promptFile)}; "$CLAUDE" "\${ARGS[@]}" -- "$PROMPT"`
       : `"$CLAUDE" "\${ARGS[@]}"`,
     `rm -f ${shq(script)}`,
-    'exec bash -l',
+    KEEP_OPEN,
     '',
   ];
   fs.writeFileSync(script, lines.join('\n'), { mode: 0o700 });
-  const title = rec.name.replace(/;/g, ',');
-  const r = await runWT(['-w', '0', 'new-tab', '--title', title, 'wsl.exe', '-d', WSL_DISTRO, '--cd', rec.cwd, '--', 'bash', '-l', script]);
-  if (r.code !== 0) throw new Error(`wt.exe failed: ${clip(r.stderr || r.stdout, 200)}`);
+  await openScript(script, { title: rec.name, cwd: rec.cwd });
   rec.state = 'launched';
 }
 
@@ -328,20 +350,20 @@ function watchLaunch(rec) {
       if (!rec.bridgeUrl && rec.state !== 'ready') rec.note = 'Started, but no phone link yet. It appears in Live once Remote Control connects.';
       return;
     }
-    setTimeout(tick, tries < 10 ? 1500 : 4000);
+    setTimeout(tick, tries < 10 ? 1500 : 4000).unref?.();
   };
-  setTimeout(tick, 1500);
+  setTimeout(tick, 1500).unref?.(); // the HTTP server keeps the process alive; tests and the CLI need not wait
 }
 
 export async function attachTerminal(bgId, name) {
   if (!/^[0-9a-f]{6,}$/.test(bgId || '')) throw new Error('bad id');
-  if (!IS_WSL) throw new Error(`${NO_WT}. In a terminal, run: claude attach ${bgId}`);
-  assertWtSafe(HOME);
-  const script = path.join(paths.launchDir, `attach-${bgId}.sh`);
-  assertWtSafe(script);
-  fs.writeFileSync(script, ['#!/usr/bin/env bash', `${shq(CLAUDE_BIN)} attach ${shq(bgId)}`, `rm -f ${shq(script)}`, 'exec bash -l', ''].join('\n'), { mode: 0o700 });
-  const r = await runWT(['-w', '0', 'new-tab', '--title', sanitizeName(name, bgId), 'wsl.exe', '-d', WSL_DISTRO, '--cd', HOME, '--', 'bash', '-l', script]);
-  if (r.code !== 0) throw new Error(clip(r.stderr, 200));
+  if (!terminal()) throw new Error(`${NO_TERM}. In a terminal, run: claude attach ${bgId}`);
+  assertTermSafe(HOME);
+  const script = scriptFile(`attach-${bgId}`);
+  assertTermSafe(script);
+  const title = sanitizeName(name, bgId);
+  fs.writeFileSync(script, ['#!/usr/bin/env bash', `cd -- ${shq(HOME)}`, `printf '\\033]0;%s\\007' ${shq(title)}`, `${shq(CLAUDE_BIN)} attach ${shq(bgId)}`, `rm -f ${shq(script)}`, KEEP_OPEN, ''].join('\n'), { mode: 0o700 });
+  await openScript(script, { title, cwd: HOME });
 }
 
 export async function stopBackground(bgId) {
@@ -351,9 +373,18 @@ export async function stopBackground(bgId) {
 }
 
 export async function openShell(cwd, title) {
-  assertWtSafe(cwd);
-  const r = await runWT(['-w', '0', 'new-tab', '--title', sanitizeName(title, 'Shell'), 'wsl.exe', '-d', WSL_DISTRO, '--cd', cwd]);
-  if (r.code !== 0) throw new Error(clip(r.stderr, 200));
+  const t = terminal();
+  const name = sanitizeName(title, 'Shell');
+  if (!t && !IS_WSL) throw new Error(NO_TERM);
+  if (!t || t.kind === 'wt') {
+    assertWtSafe(cwd);
+    const r = await runWT(['-w', '0', 'new-tab', '--title', name, 'wsl.exe', '-d', WSL_DISTRO, '--cd', cwd]);
+    if (r.code !== 0) throw new Error(clip(r.stderr, 200));
+    return;
+  }
+  const script = scriptFile(`shell-${crypto.randomUUID()}`);
+  fs.writeFileSync(script, ['#!/usr/bin/env bash', `cd -- ${shq(cwd)} || exit 1`, `printf '\\033]0;%s\\007' ${shq(name)}`, `rm -f ${shq(script)}`, KEEP_OPEN, ''].join('\n'), { mode: 0o700 });
+  await openInTerminal(t, script);
 }
 
 export async function openVSCode(cwd) {

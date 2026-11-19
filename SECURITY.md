@@ -58,9 +58,10 @@ for the setup and for how the traffic is protected on Wi-Fi and over a VPN.
   `--no-optional-locks`, hooks and fsmonitor disabled) and project folders. It does not follow symlinks out of a
   project when showing documents, and never reads files that look like secrets (`.env`, keys, credentials) for the
   project scout or spin-off handoffs.
-- **Writes**: its own `data/` folder; new folders you explicitly create (Spin off / New project), only inside your
-  home folder and never inside `~/.ssh`, `~/.claude`, `~/.config` or Pilotage itself; and, if you run
-  `pilotage install` on WSL, a Startup entry, a Desktop shortcut and `%LOCALAPPDATA%\Pilotage`.
+- **Writes**: its own data folder (`~/.pilotage` for an npm install, `data/` in a git clone; `data/` below means
+  that folder); new folders you explicitly create (Spin off / New project), only inside your home folder and never
+  inside `~/.ssh`, `~/.claude`, `~/.config` or Pilotage itself; and, if you run `pilotage install`, on WSL a Startup
+  entry, a Desktop shortcut and `%LOCALAPPDATA%\Pilotage`, on macOS `~/Library/LaunchAgents/local.pilotage.plist`.
 - **One exception to "never writes" an agent's files**, only when you ask for it (Settings → Trust folders, or the
   "Trust this folder" checkbox when starting a session): it records Claude Code's answer to "Do you trust the files
   in this folder?" for that folder, the `hasTrustDialogAccepted` flag in `~/.claude.json`. It changes nothing else,

@@ -7,7 +7,7 @@ import type { CreatedProject } from '../../types-extra';
 import { Button, Callout, Field, SegmentedControl, Spinner, Switch } from '../ui';
 import { plural } from '../../util';
 import { LaunchStatus } from './LaunchStatus';
-import { useWsl } from '../../api';
+import { terminalPlace, useTerminal } from '../../api';
 import { errMsg, request, RequestError, useDebounced, type WorkspaceOption } from './lib';
 
 export type DryRun = {
@@ -116,7 +116,7 @@ export function WorkspaceSelect({ id, value, onChange, options, noneLabel = 'No 
 
 /** Git init + launch + AI hand-off options, shared by both dialogs. */
 export function CreateOptions({ gitInit, setGitInit, launch, setLaunch, useAI, setUseAI }: { gitInit: boolean; setGitInit: (v: boolean) => void; launch: LaunchChoice; setLaunch: (v: LaunchChoice) => void; useAI: boolean; setUseAI: (v: boolean) => void }) {
-  const wsl = useWsl();
+  const term = useTerminal();
   return (
     <>
       <div className="pj-setting">
@@ -135,14 +135,14 @@ export function CreateOptions({ gitInit, setGitInit, launch, setLaunch, useAI, s
       </div>
       <Field label="Start a session in it">
         <SegmentedControl
-          value={!wsl && launch === 'terminal' ? 'background' : launch}
+          value={!term && launch === 'terminal' ? 'background' : launch}
           onChange={setLaunch}
           label="Start a session"
           block
           options={[
             { value: 'none', label: 'Not now' },
-            // Terminal tabs need WSL2 + Windows Terminal; elsewhere sessions start in the background.
-            ...(wsl ? [{ value: 'terminal' as const, label: <><Monitor size={14} /> Terminal</>, title: 'A Windows Terminal tab on your PC, with Remote Control' }] : []),
+            // No terminal on this PC (headless, over SSH): sessions start in the background.
+            ...(term ? [{ value: 'terminal' as const, label: <><Monitor size={14} /> Terminal</>, title: `${terminalPlace(term, true)} on your PC, with Remote Control` }] : []),
             { value: 'background', label: <><Cloud size={14} /> Background</>, title: 'No window on the PC; continue in the Claude app' },
           ]}
         />

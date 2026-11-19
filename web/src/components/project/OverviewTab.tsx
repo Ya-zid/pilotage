@@ -4,7 +4,7 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowUpRight, Bot, Code2, Copy, FolderOpen, Info, RefreshCw, Server, Sparkles, Square, SquareTerminal } from 'lucide-react';
-import { api, useInvalidate, useWsl } from '../../api';
+import { api, terminalPlace, useInvalidate, useTerminal, useWsl } from '../../api';
 import { useScout, useSpinoffs, useWork } from '../../api-extra';
 import type { ProjectDetail } from '../../types';
 import type { WorkItem } from '../../types-extra';
@@ -202,7 +202,8 @@ function Automations({ p }: { p: ProjectDetail }) {
 // ---------------------------------------------------------------- side column
 function DetailsCard({ p, go }: { p: ProjectDetail; go: Go }) {
   const toast = useToast();
-  const wsl = useWsl(); // a terminal tab needs Windows Terminal; VS Code and the folder open natively elsewhere
+  const wsl = useWsl(); // Explorer on WSL; the file manager elsewhere
+  const term = useTerminal();
   const first = Math.min(...[p.firstAt, p.gitExtras?.firstCommitAt || 0].filter((x) => x > 0), Infinity);
   const g = p.gitFull?.ok ? p.gitFull : null;
   const changes = g ? g.dirty + g.untracked : 0;
@@ -296,8 +297,8 @@ function DetailsCard({ p, go }: { p: ProjectDetail; go: Go }) {
           <Button size="sm" icon={<Code2 />} onClick={() => open('vscode')} title="Open this folder in VS Code on your PC">
             VS Code
           </Button>
-          {wsl && (
-            <Button size="sm" icon={<SquareTerminal />} onClick={() => open('shell')} title="Open a terminal tab here on your PC">
+          {term && (
+            <Button size="sm" icon={<SquareTerminal />} onClick={() => open('shell')} title={`Open ${terminalPlace(term)} here on your PC`}>
               Terminal
             </Button>
           )}

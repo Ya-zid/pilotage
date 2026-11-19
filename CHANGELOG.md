@@ -7,6 +7,29 @@ minor versions.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-19
+
+Install in one command, and macOS and Linux start sessions in a terminal like WSL does.
+
+### Added
+
+- npm package: `npx pilotage-cli` starts Pilotage and opens it; `npm install -g pilotage-cli` keeps it (the command
+  is still `pilotage`). An npm install keeps its data in `~/.pilotage`; a git clone keeps using its `data/` folder.
+- macOS: sessions started from the browser or the phone open in a Terminal window (`PILOTAGE_TERMINAL=iTerm` for
+  iTerm), with Remote Control, like the Windows Terminal tabs on WSL. Codex and Gemini sessions can be started too.
+- Linux: the same in your terminal emulator (`x-terminal-emulator`, GNOME Terminal, Konsole, kitty, Alacritty,
+  WezTerm, Ghostty, foot, xterm…, or `PILOTAGE_TERMINAL`) when there's a desktop session. Over SSH or headless,
+  sessions still start in the background.
+- macOS: `pilotage install` adds a login item (a LaunchAgent) that starts Pilotage at login; `pilotage uninstall`
+  removes it.
+- A demo GIF at the top of the README.
+
+### Changed
+
+- `pilotage` with no command starts Pilotage if needed and opens it in the browser (it used to print the status:
+  `pilotage status`).
+- CI also runs on macOS, and installs the packed npm package on Linux and macOS to check that it starts.
+
 ## [0.2.0] - 2026-11-18
 
 A calmer UI: state at a glance instead of paragraphs, and short tasks.
@@ -63,6 +86,7 @@ First public release.
 - Security: a 127.0.0.1-only server, paired devices, one-time codes, a CSRF header, a Host allow-list and redaction
   of common secret formats.
 
-[Unreleased]: https://github.com/Ya-zid/pilotage/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/Ya-zid/pilotage/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/Ya-zid/pilotage/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Ya-zid/pilotage/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Ya-zid/pilotage/releases/tag/v0.1.0

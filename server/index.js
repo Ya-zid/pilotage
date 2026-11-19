@@ -20,7 +20,7 @@ import { listDevServers, stopDevServer } from './sources/processes.js';
 import { AIEngine } from './ai/engine.js';
 import { usageNow } from './ai/usage.js';
 import { Views } from './views.js';
-import { launch, getLaunch, listLaunches, attachTerminal, stopBackground, openVSCode, openExplorer, openShell, openUrlOnPC, sanitizeName } from './launch.js';
+import { launch, getLaunch, listLaunches, attachTerminal, stopBackground, openVSCode, openExplorer, openShell, openUrlOnPC, sanitizeName, terminal } from './launch.js';
 import { trustState, trustFolder } from './claude-trust.js';
 import { tilde as tildePath } from './work/spinoff.js';
 import { windowsAddresses, forwarderStatus, ensureForwarder, enablePhoneAccess, stopForwarder, phoneAccessStatus, firewallRuleExists, setTrustedSsid, phoneAddresses, phoneUrls, lanConnectionAllowed, lanAllowList, LAN_BIND, LAN_MODE } from './net.js';
@@ -244,8 +244,9 @@ route('GET', '/api/bootstrap', async (req, res, { dev, url }) => {
     settings: store.settings,
     // The name the greeting and AI prompts use (settings.profile.name, else detected from git / $USER).
     user: { name: userName(store.settings), detectedName: detectedName() },
-    // WSL2 + Windows: Windows Terminal, VS Code / Explorer on the PC, the phone forwarder. Elsewhere the UI hides those.
-    platform: { wsl: IS_WSL, os: OS_NAME },
+    // WSL2 + Windows: VS Code / Explorer on the PC, the phone forwarder. Elsewhere the UI hides those.
+    // terminal: where sessions open (Windows Terminal, Terminal, kitty…); null = background only.
+    platform: { wsl: IS_WSL, os: OS_NAME, terminal: terminal()?.label || null },
     home: HOME,
     usage: usageNow(),
     index: index.progress,
