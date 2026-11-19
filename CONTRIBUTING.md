@@ -99,7 +99,8 @@ scripts/demo/stop-demo.sh          # stop it
 
 The demo server runs with an empty environment and a fake home folder: nothing from your shell, `~/.claude`,
 `~/.codex` or git config reaches it, it makes no AI calls, and your own Pilotage is not touched.
-`scripts/demo/shoot.mjs` takes the screenshots in `docs/images` (it needs Playwright).
+`scripts/demo/shoot.mjs` takes the screenshots in `docs/images` and `scripts/demo/record.mjs` records the README GIF
+(both need Playwright; the GIF also needs Pillow).
 
 ## Where things live
 

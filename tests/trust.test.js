@@ -36,6 +36,17 @@ test('trust: a folder is trusted by its own record or a parent, never by the hom
   assert.equal(trustState(app, opts).trusted, false, 'unreadable config: not trusted');
 });
 
+test('trust: a folder reached through a symlink is trusted by its real path, and the reverse', () => {
+  const real = mk('real-proj', 'sub');
+  const link = path.join(HOME, 'link-proj');
+  fs.symlinkSync(path.dirname(real), link);
+  fs.writeFileSync(FILE, JSON.stringify({ projects: { [fs.realpathSync(path.dirname(real))]: { hasTrustDialogAccepted: true } } }));
+  assert.equal(trustState(path.join(link, 'sub'), opts).trusted, true, 'Claude recorded the real path');
+  fs.writeFileSync(FILE, JSON.stringify({ projects: { [link]: { hasTrustDialogAccepted: true } } }));
+  assert.equal(trustState(path.join(link, 'sub'), opts).trusted, true, 'recorded under the link');
+  assert.equal(trustState(link, { ...opts, home: link }).home, true, 'the home folder through a link is still home');
+});
+
 test('trust: writes one key, keeps everything else, keeps the file mode, backs up, and releases the lock', async () => {
   const proj = mk('proj');
   const before = { numStartups: 7, oauthAccount: { emailAddress: 'x@example.com' }, projects: { [proj]: { allowedTools: ['Bash'], hasTrustDialogAccepted: false }, '/elsewhere': { hasTrustDialogAccepted: true } } };
@@ -43,7 +54,10 @@ test('trust: writes one key, keeps everything else, keeps the file mode, backs u
   fs.chmodSync(FILE, 0o600);
   assert.deepEqual(await trustFolder(proj, opts), { changed: true });
   const after = JSON.parse(fs.readFileSync(FILE, 'utf8'));
-  assert.deepEqual(after, { ...before, projects: { ...before.projects, [proj]: { allowedTools: ['Bash'], hasTrustDialogAccepted: true } } });
+  const expected = { ...before.projects, [proj]: { allowedTools: ['Bash'], hasTrustDialogAccepted: true } };
+  // Where the temp folder is reached through a symlink (macOS: /var -> /private/var), the real path is recorded too.
+  if (fs.realpathSync(proj) !== proj) expected[fs.realpathSync(proj)] = { hasTrustDialogAccepted: true };
+  assert.deepEqual(after, { ...before, projects: expected });
   assert.equal(fs.statSync(FILE).mode & 0o777, 0o600);
   assert.equal(fs.existsSync(`${FILE}.lock`), false, 'lock released');
   assert.deepEqual(fs.readdirSync(HOME).filter((n) => n.includes('.tmp')), [], 'no temp file left');

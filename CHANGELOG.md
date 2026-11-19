@@ -30,6 +30,11 @@ Install in one command, and macOS and Linux start sessions in a terminal like WS
   `pilotage status`).
 - CI also runs on macOS, and installs the packed npm package on Linux and macOS to check that it starts.
 
+### Fixed
+
+- Trust folders: a folder reached through a symlink (on macOS, anything under `/var` or `/tmp`) is found under either
+  spelling in `~/.claude.json`, so a folder Claude Code already trusts isn't offered again.
+
 ## [0.2.0] - 2026-11-18
 
 A calmer UI: state at a glance instead of paragraphs, and short tasks.

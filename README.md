@@ -8,7 +8,7 @@ running right now, AI summaries of your sessions, and a task list that fills its
 [![Node.js >= 22](https://img.shields.io/badge/node-%3E%3D22-339933.svg)](https://nodejs.org/)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-![Pilotage: Home with running sessions, today's plan and pick-up list](docs/images/hero.png)
+![Pilotage: Home shows what is waiting; yesterday's session is picked up and resumed with a new message](docs/images/demo.gif)
 
 Pilotage reads the session transcripts your coding agents already write on your computer, groups them by project,
 and shows them in a web app you open on your PC or your phone. It never changes your projects or your agents' files.
@@ -63,6 +63,8 @@ sessions), and starting or resuming sessions from the browser or your phone (opt
 
 <details>
 <summary>More screenshots (fictional demo data)</summary>
+
+![Pilotage on the PC and on a phone](docs/images/hero.png)
 
 | | |
 |---|---|
