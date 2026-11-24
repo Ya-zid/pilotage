@@ -22,7 +22,7 @@ function runIn(env, script) {
 }
 
 function tempHome(name) {
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), `pilotage-${name}-`));
+  const base = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), `pilotage-${name}-`));
   const home = path.join(base, 'home');
   fs.mkdirSync(home);
   return { base, home, data: path.join(base, 'data') };
