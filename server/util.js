@@ -337,14 +337,14 @@ const SECRET_PATTERNS = [
   /((?:AKIA|ASIA)[0-9A-Z]{2})[0-9A-Z]{14}/g,
   /(AIza[0-9A-Za-z_-]{2})[0-9A-Za-z_-]{33}/g,
   /(xox[abposr]-)[A-Za-z0-9-]{10,}/g,
-  /(?<![A-Za-z0-9_-])(eyJ[A-Za-z0-9_-]{4})[A-Za-z0-9_-]{6,4000}\.[A-Za-z0-9_-]{10,4000}\.[A-Za-z0-9_-]{10,4000}/g, // JWT
+  // JWT, at a token boundary (also right after a %XX or \\u003d escape, as in OAuth redirect URLs).
+  /(?<=^|[^A-Za-z0-9_-]|%[0-9A-Fa-f]{2}|\\u003[dD])(eyJ[A-Za-z0-9_-]{4})[A-Za-z0-9_-]{6,20000}\.[A-Za-z0-9_-]{10,20000}\.[A-Za-z0-9_-]{10,20000}/g,
   /\b(re_[A-Za-z0-9]{3})[A-Za-z0-9_]{20,}/g,
   /(SG\.[A-Za-z0-9_-]{3})[A-Za-z0-9_.-]{30,}/g,
   /\b(\d{8,10}:AA)[A-Za-z0-9_-]{30,}/g, // Telegram bot token
   /\b(Bearer\s+[A-Za-z0-9]{2})[A-Za-z0-9._~+\/=-]{14,}/g,
   // Basic auth in headers, JSON or code; the credential must look like base64 (a digit or + / =), not a word.
   /\b(Authorization["']?\s*[:=]\s*["']?Basic\s+[A-Za-z0-9+\/]{2})(?=[A-Za-z0-9+\/=]*[0-9+\/=])[A-Za-z0-9+\/=]{10,}/gi,
-  /(\bcurl\b[^\n]{0,300}?\s(?:-u|--user)\s*["']?[^\s:"']{1,100}:)[^\s"']{4,}/g, // curl -u user:password
   /\b(gsk_[A-Za-z0-9]{2})[A-Za-z0-9]{30,}/g, // Groq
   /\b(hf_[A-Za-z0-9]{2})[A-Za-z0-9]{28,}/g, // Hugging Face
   /\b(xai-[A-Za-z0-9]{2})[A-Za-z0-9]{30,}/g, // xAI
@@ -359,13 +359,15 @@ const SECRET_PATTERNS = [
 // Every repeat is bounded so redact() stays linear on any input. Key names are bounded ({0,40} around the word): unbounded, a long identifier run made this cubic (a 20 KB blob
 // froze the server for over a minute). KEY=value / "key": "value" (quoted values may contain spaces; bare ones stop at whitespace, quotes and commas) where the key name looks secret (DB_PASSWORD, STRIPE_SECRET_KEY, api_key, mot de passe…)
 const KV_SECRET =
-  /\b([A-Za-z0-9_.-]{0,40}(?:password|passwd|pwd|secret|api[_-]?key|access[_-]?key|private[_-]?key|access[_-]?token|auth[_-]?token|refresh[_-]?token|client[_-]?secret|token|mot de passe|mdp)[A-Za-z0-9_.-]{0,40}["']?\s*[:=]\s*)(?:"(?!\s|\+[^"\n]*\+")([^"\n]{4,200})"|'(?!\s|\+[^'\n]*\+')([^'\n]{4,200})'|([^\s"',]{4,}))/gi;
+  /\b([A-Za-z0-9_.-]{0,40}(?:password|passwd|pwd|secret|api[_-]?key|access[_-]?key|private[_-]?key|access[_-]?token|auth[_-]?token|refresh[_-]?token|client[_-]?secret|token|mot de passe|mdp)[A-Za-z0-9_.-]{0,40}["']?\s{0,20}[:=]\s{0,20})(?:"(?!\s|\+[^"\n]*\+")([^"\n]{4,200})"|'(?!\s|\+[^'\n]*\+')([^'\n]{4,200})'|([^\s"',]{4,}))/gi;
 const PEM = /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g;
 
 export function redact(text) {
   if (!text || typeof text !== 'string') return text;
   let s = text.replace(PEM, '[private key hidden]');
   for (const rx of SECRET_PATTERNS) s = s.replace(rx, (_m, keep) => `${keep}…[hidden]`);
+  // curl -u user:password anywhere on a curl line (checked per line, so a long line costs one pass).
+  if (s.includes('curl')) s = s.replace(/^.*\bcurl\b.*$/gm, (ln) => ln.replace(/(\s(?:-u|--user)\s{0,5}["']?[^\s:"']{1,100}:)[^\s"']{4,}/g, (_m, keep) => `${keep}…[hidden]`));
   s = s.replace(KV_SECRET, (m, k, dq, sq, bare) => {
     const v = dq ?? sq ?? bare;
     if (/^(true|false|null|none|undefined|required|optional|\*+|\[hidden\].*|….*)$/i.test(v)) return m;

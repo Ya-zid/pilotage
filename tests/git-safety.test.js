@@ -119,3 +119,14 @@ test('when git can\'t say which config defines filters (old git, timeout), statu
   assert.equal(riskyConfig(0, 'local\0filter.x.clean\ngit-lfs clean\ntouch /m\0'), true);
   assert.equal(riskyConfig(0, 'garbage'), true, 'unreadable output');
 });
+
+test('a program shipped inside the repo is never found through a relative PATH entry', async () => {
+  const dir = repo('relpath');
+  // A repo-shipped "git-crypt" next to an allow-listed filter command, and a relative PATH entry pointing at it.
+  fs.writeFileSync(path.join(dir, 'git-crypt'), `#!/bin/sh\ntouch '${marker('relpath')}'\ncat\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(dir, '.gitattributes'), '* filter=c\n');
+  git(dir, 'config', 'filter.c.clean', 'git-crypt clean');
+  fs.utimesSync(path.join(dir, 'a.txt'), new Date(Date.now() + 5000), new Date(Date.now() + 5000));
+  const { gitEnvPath } = await import('../server/sources/git.js');
+  assert.equal(gitEnvPath(`/usr/bin:.:node_modules/.bin::/bin:`), '/usr/bin:/bin', 'only absolute PATH entries');
+});

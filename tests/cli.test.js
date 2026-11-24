@@ -148,13 +148,19 @@ test('pilotage doctor says what is missing and how to fix it, without changing a
   assert.match(r3.stdout, /✗.*Claude Code 1\.0\.89 is too old/);
   assert.equal(r3.status, 1);
   assert.deepEqual(fs.readdirSync(data).filter((f) => f !== 'logs'), [], 'doctor wrote nothing in the data folder');
+  // A data folder that doesn't exist yet is not created by doctor.
+  const missing = path.join(data, 'not-yet', 'data');
+  const r4 = run({ PILOTAGE_DATA: missing });
+  assert.match(r4.stdout, /created at the first start/);
+  assert.equal(fs.existsSync(path.join(data, 'not-yet')), false, 'doctor created the data folder');
 });
 
 test('Linux: pilotage install sets up a systemd user service, and uninstall removes it', { skip: process.platform !== 'linux' && 'Linux only' }, async () => {
-  const { home, port, env: base } = tempEnv();
+  const { home, data, port, env: base } = tempEnv();
   const log = path.join(home, 'systemctl.log');
   const fake = path.join(home, 'systemctl');
-  fs.writeFileSync(fake, `#!/bin/sh\necho "$*" >> '${log}'\n`, { mode: 0o755 });
+  // Records its arguments; `is-enabled` answers "enabled" once `enable` was called (like systemctl).
+  fs.writeFileSync(fake, `#!/bin/sh\necho "$*" >> '${log}'\ncase "$*" in *is-enabled*) grep -q -- '--user enable' '${log}' && ! grep -q -- 'disable' '${log}' ;; esac\n`, { mode: 0o755 });
   const env = { ...base, PILOTAGE_SYSTEMCTL: fake, XDG_CONFIG_HOME: path.join(home, '.config') };
   // A server already answering on the port, so install doesn't build or start one.
   const proc = spawn(process.execPath, [path.join(ROOT, 'server', 'index.js')], { env, stdio: 'ignore' });
@@ -171,7 +177,9 @@ test('Linux: pilotage install sets up a systemd user service, and uninstall remo
     const unit = fs.readFileSync(path.join(home, '.config', 'systemd', 'user', 'pilotage.service'), 'utf8');
     assert.match(unit, new RegExp(`^ExecStart="${ROOT.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/bin/pilotage" run$`, 'm'));
     assert.match(unit, /^WantedBy=default\.target$/m);
-    assert.match(fs.readFileSync(log, 'utf8'), /--user enable pilotage\.service/);
+    assert.match(fs.readFileSync(log, 'utf8'), /--user enable --now pilotage\.service/);
+    assert.match(unit, new RegExp(`^Environment="PILOTAGE_DATA=${data.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"$`, 'm'), 'the data folder is recorded');
+    assert.match(unit, /^Environment="PILOTAGE_PORT=\d+"$/m, 'and the port');
     assert.match(execFileSync('bash', [CLI, 'status'], { env, encoding: 'utf8' }), /Starts automatically at login/);
     execFileSync('bash', [CLI, 'uninstall'], { env, encoding: 'utf8' });
     assert.equal(fs.existsSync(path.join(home, '.config', 'systemd', 'user', 'pilotage.service')), false);

@@ -540,7 +540,7 @@ test("Pilotage's claude -p calls don't bill an ANTHROPIC_API_KEY that happens to
   assert.equal(env.ANTHROPIC_API_KEY, undefined);
   assert.equal(env.ANTHROPIC_AUTH_TOKEN, undefined);
   assert.equal(env.PILOTAGE_DATA, undefined);
-  assert.equal(env.PATH, '/usr/bin');
+  assert.equal(env.PATH, `/usr/bin:${path.dirname(process.execPath)}`, "the user's PATH first, Pilotage's node last (for claude's children)");
   const opted = claudeEnv({ ...shell, PILOTAGE_USE_ANTHROPIC_API_KEY: '1' });
   assert.equal(opted.ANTHROPIC_API_KEY, 'sk-ant-x', 'kept when asked for');
 });
@@ -751,4 +751,69 @@ test('a malformed but successful AI reply is repaired, not retried forever as a 
   assert.deepEqual(d.highlights, ['Shipped the fix']);
   assert.deepEqual(sanitizeDigest({ highlights: { a: 1 } }).highlights, []);
   assert.deepEqual(sanitizeDigest(null).highlights, []);
+});
+
+test('a transcript folder that is unreadable for a moment keeps its sessions (no drop, no full re-parse)', { skip: process.getuid?.() === 0 && 'root reads anything' }, () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'pilotage-eio-'));
+  const proj = path.join(home, '.claude', 'projects', '-home-alex-demo');
+  fs.mkdirSync(proj, { recursive: true });
+  const id = '33333333-4444-4555-8666-777777777777';
+  fs.writeFileSync(path.join(proj, `${id}.jsonl`), line({ isSidechain: false, cwd: '/home/alex/demo', sessionId: id, entrypoint: 'cli', type: 'user', turnOrigin: 'human', message: { role: 'user', content: 'Ship it' }, timestamp: '2026-11-01T10:00:00.000Z' }));
+  const url = JSON.stringify(new URL('../server/sources/sessions.js', import.meta.url).href);
+  const cfg = JSON.stringify(new URL('../server/config.js', import.meta.url).href);
+  const script = `const c = await import(${cfg}); c.ensureDirs(); const { SessionIndex } = await import(${url});
+    const ix = new SessionIndex(); ix.adapters = [];
+    await ix.scan(); const a = ix.list().length;
+    const fs = await import('node:fs'); fs.chmodSync(${JSON.stringify(proj)}, 0);
+    await ix.scan(); const b = ix.list().length;
+    fs.chmodSync(${JSON.stringify(proj)}, 0o755);
+    const before = ix.get(${JSON.stringify(id)})?.offset; await ix.scan();
+    console.log(JSON.stringify([a, b, ix.list().length, before === ix.get(${JSON.stringify(id)})?.offset]));`;
+  try {
+    const out = execFileSync(process.execPath, ['--input-type=module', '-e', script], { env: { ...process.env, HOME: home, PILOTAGE_DATA: path.join(home, 'data'), PILOTAGE_WSL: '0' }, encoding: 'utf8' }).trim();
+    const [a, b, c, sameOffset] = JSON.parse(out.split('\n').pop());
+    assert.equal(a, 1);
+    assert.equal(b, 1, 'the session vanished while its folder could not be read');
+    assert.equal(c, 1);
+    assert.equal(sameOffset, true, 'no full re-parse afterwards');
+  } finally {
+    fs.chmodSync(proj, 0o755);
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('a prompt with several screenshots (a line over 6 MB) is indexed, and each reply stays on its own prompt', async () => {
+  const { SessionIndex } = await import('../server/sources/sessions.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pilotage-images-'));
+  const id = '44444444-5555-4666-8777-888888888888';
+  const f = path.join(dir, `${id}.jsonl`);
+  const base = { isSidechain: false, cwd: '/home/alex/demo', sessionId: id, entrypoint: 'cli' };
+  const img = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo' + 'A'.repeat(2_300_000) } };
+  let s = line({ ...base, type: 'user', turnOrigin: 'human', message: { role: 'user', content: 'First small prompt' }, timestamp: '2026-11-01T10:00:00.000Z' });
+  s += line({ ...base, type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'Answer one' }] }, timestamp: '2026-11-01T10:00:05.000Z' });
+  s += line({ ...base, type: 'user', turnOrigin: 'human', message: { role: 'user', content: [{ type: 'text', text: 'Fix the layout shown in these screenshots' }, img, img, img] }, timestamp: '2026-11-01T10:05:00.000Z' });
+  s += line({ ...base, type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'Fixed the layout' }] }, timestamp: '2026-11-01T10:06:00.000Z' });
+  fs.writeFileSync(f, s);
+  const st = fs.statSync(f);
+  const ix = new SessionIndex();
+  await ix.indexFile({ id, file: f, src: { id: 'test', mapCwd: (p) => p }, projectKey: 'k', size: st.size, mtimeMs: st.mtimeMs });
+  const turns = ix.loadTurns(id);
+  assert.equal(turns.length, 2, 'the screenshot prompt is a turn');
+  assert.match(turns[1].p, /Fix the layout/);
+  assert.equal(turns[1].a, 'Fixed the layout');
+  assert.equal(turns[0].a, 'Answer one', 'the first reply is not overwritten');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('redaction: JWTs after URL escapes, curl -u anywhere on the line, and no slow separators', async () => {
+  const { redact } = await import('../server/util.js');
+  const jwt = 'eyJ' + 'hbGciOiJIUzI1NiJ9' + '.' + 'eyJzdWIiOiIxMjM0NTY3ODkwIn0' + '.' + 'dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U';
+  assert.ok(!redact(`https://app.example/cb#id_token%3D${jwt}&state=x`).includes('dozjgNryP4J3'), 'URL-encoded id_token');
+  assert.ok(!redact(`{"t":"\\u003d${jwt}"}`).includes('dozjgNryP4J3'));
+  const curl = `curl -X POST https://api.example/v1 -H 'Content-Type: application/json' -d '${JSON.stringify({ q: 'x'.repeat(400) })}' -u admin:` + 'hunter2pass';
+  assert.ok(!redact(curl).includes('hunter2pass'), '-u far into a long curl line');
+  const slow = 'a-'.repeat(20) + 'pwd'.repeat(13) + '=' + ' '.repeat(1_000_000);
+  const t0 = performance.now();
+  redact(slow);
+  assert.ok(performance.now() - t0 < 400, 'spaces after a secret-sounding key stay fast');
 });
