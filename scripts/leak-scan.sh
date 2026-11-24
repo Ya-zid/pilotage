@@ -36,19 +36,20 @@ fi
 [ "${#FILES[@]}" -gt 0 ] || { echo "leak-scan: no files found in $TARGET" >&2; exit 2; }
 
 # ---------------------------------------------------------------- patterns: label<TAB>regex
+# POSIX ERE only: macOS's BSD grep has no \b or \s (they silently match nothing), so word starts are spelled out.
 GENERIC=$(cat <<'EOF'
 anthropic-key	sk-ant-[A-Za-z0-9_-]{20,}
-openai-key	\bsk-(proj-)?[A-Za-z0-9_-]{32,}
-stripe-key	\b[sr]k_live_[A-Za-z0-9]{16,}
-github-token	\bgh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}
-aws-key	\b(AKIA|ASIA)[0-9A-Z]{16}\b
-google-key	\bAIza[0-9A-Za-z_-]{35}
-slack-token	\bxox[abprs]-[A-Za-z0-9-]{10,}
-supabase-token	\bsbp_[0-9a-f]{40}
-npm-token	\bnpm_[A-Za-z0-9]{32,}
-groq-key	\bgsk_[A-Za-z0-9]{32,}
-huggingface-token	\bhf_[A-Za-z0-9]{30,}
-gitlab-token	\bglpat-[A-Za-z0-9_-]{18,}
+openai-key	(^|[^A-Za-z0-9_])sk-(proj-)?[A-Za-z0-9_-]{32,}
+stripe-key	(^|[^A-Za-z0-9_])[sr]k_live_[A-Za-z0-9]{16,}
+github-token	(^|[^A-Za-z0-9_])gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}
+aws-key	(^|[^A-Za-z0-9_])(AKIA|ASIA)[0-9A-Z]{16}([^A-Za-z0-9_]|$)
+google-key	(^|[^A-Za-z0-9_])AIza[0-9A-Za-z_-]{35}
+slack-token	(^|[^A-Za-z0-9_])xox[abprs]-[A-Za-z0-9-]{10,}
+supabase-token	(^|[^A-Za-z0-9_])sbp_[0-9a-f]{40}
+npm-token	(^|[^A-Za-z0-9_])npm_[A-Za-z0-9]{32,}
+groq-key	(^|[^A-Za-z0-9_])gsk_[A-Za-z0-9]{32,}
+huggingface-token	(^|[^A-Za-z0-9_])hf_[A-Za-z0-9]{30,}
+gitlab-token	(^|[^A-Za-z0-9_])glpat-[A-Za-z0-9_-]{18,}
 private-key	-----BEGIN [A-Z ]*PRIVATE KEY-----
 email	[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}
 home-path	/home/[A-Za-z][A-Za-z0-9._-]*|/Users/[A-Za-z][A-Za-z0-9._-]*|[A-Za-z]:\\\\?Users\\\\?[A-Za-z][A-Za-z0-9._-]*
@@ -56,7 +57,7 @@ EOF
 )
 PRIVATE=""
 if [ -f "$PATTERNS_FILE" ]; then
-  PRIVATE=$(grep -v -E '^\s*(#|$)' "$PATTERNS_FILE" | sed 's/^/private\t/')
+  PRIVATE=$(grep -v -E '^[[:space:]]*(#|$)' "$PATTERNS_FILE" | awk '{ print "private\t" $0 }')
 else
   echo "leak-scan: no private pattern list ($PATTERNS_FILE): only generic checks." >&2
 fi

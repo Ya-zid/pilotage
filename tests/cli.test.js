@@ -485,6 +485,25 @@ test('leak-scan also checks file names, npm/Groq/Hugging Face/GitLab tokens, and
   assert.match(r.stdout, /web\/dist\/assets\/app\.js/);
 });
 
+test('leak-scan uses only portable regex and sed (macOS has BSD grep and sed: \\b, \\s and \\t silently match nothing there)', { skip: SKIP }, () => {
+  const script = fs.readFileSync(path.join(ROOT, 'scripts', 'leak-scan.sh'), 'utf8');
+  const table = /GENERIC=\$\(cat <<'EOF'\n([\s\S]*?)\nEOF/.exec(script)[1];
+  assert.doesNotMatch(table, /\\[bswdBSWD]/, 'a GNU-only escape in the pattern table');
+  assert.doesNotMatch(script, /grep[^\n]*'[^'\n]*\\s/, 'a GNU-only \\s in a grep expression');
+  assert.doesNotMatch(script, /sed 's\/\^\/[^']*\\t/, "BSD sed writes \\t as a plain t");
+  // And it still catches a token right after `=` or at the start of a line, but not inside a longer word.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pilotage-leak-b-'));
+  const scan = (text) => {
+    fs.writeFileSync(path.join(dir, 'x.txt'), text);
+    return spawnSync('bash', [path.join(ROOT, 'scripts', 'leak-scan.sh'), dir], { env: { ...process.env, PILOTAGE_LEAK_PATTERNS: path.join(dir, 'none'), PILOTAGE_LEAK_ALLOWLIST: path.join(dir, 'none') }, encoding: 'utf8' }).status;
+  };
+  const key = `npm_${'a1B2'.repeat(9)}`;
+  assert.equal(scan(`TOKEN=${key}\n`), 1);
+  assert.equal(scan(`${key}\n`), 1);
+  assert.equal(scan(`x${key}\n`), 0, 'inside a longer word');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('sessions seeded by AI-written text ask before acting, whatever Settings says (tasks, kickoffs, Home focus)', { skip: SKIP }, async (t) => {
   const { api, bgCalls } = await serverWithFakeClaude(t);
   assert.equal((await api('PATCH', '/api/settings', { settings: { launch: { permissionMode: 'bypassPermissions' } } })).status, 200);
