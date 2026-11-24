@@ -155,7 +155,7 @@ function ActivityCard({ s }: { s: SettingsT }) {
                   icon={<Rocket />}
                   loading={busy === 'all'}
                   onClick={() => post('all', '/api/ai/run', { scope: 'all' }, 'Catching up now')}
-                  title="Summarize pending work now"
+                  title={`Summarize pending work from the last ${s.ai.backfillDays ?? 30} days now (older work: Summarize now on its project)`}
                 >
                   Run now
                 </Button>
@@ -657,6 +657,13 @@ function AutomationCard({ s, patch }: { s: SettingsT; patch: PatchFn }) {
         </SettingRow>
         <SettingRow label="Summarize new work automatically" hint="Write a summary as soon as you pause a session for a while.">
           <Switch on={a.autoDigest} label="Summarize new work automatically" onChange={(v) => setAi({ autoDigest: v }, v ? 'Automatic summaries on' : 'Automatic summaries off')} />
+        </SettingRow>
+        <SettingRow
+          label="Summarize automatically: the last"
+          htmlFor="ai-window"
+          hint="Work older than this is only summarized when you ask (Summarize now on a project). A longer window spends more of your plan the first time."
+        >
+          <NumberInput id="ai-window" value={a.backfillDays ?? 30} min={1} max={3650} suffix="days" label="Summarize automatically, the last how many days" onCommit={(v) => setAi({ backfillDays: v }, `Summarizes the last ${v} days automatically`)} />
         </SettingRow>
         <SettingRow label="Today’s plan" hint="Each morning the AI proposes up to three things for today on Home. You add them or not.">
           <Switch on={a.dailyBrief} label="Today’s plan" onChange={(v) => setAi({ dailyBrief: v }, v ? 'Today’s plan on' : 'Today’s plan off')} />

@@ -14,7 +14,7 @@ export const SOURCE_KINDS = new Set(['ai', 'brief', 'user', 'idea', 'spinoff']);
 export const WHO = ['you', 'claude', 'waiting'];
 
 const BACKUPS_KEPT = 21;
-const MAX_TOMBSTONES = 3000;
+export const MAX_TOMBSTONES = 3000;
 
 function emptyData() {
   return { version: 1, items: [], spinoffs: [], tombstones: [], meta: { lastExtractAt: 0, lastExtract: null } };

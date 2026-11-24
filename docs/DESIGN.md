@@ -150,8 +150,8 @@ have a status glyph.
   1200px, padding 32px 40px.
 - Sidebar (v4): main **Home · Sessions · Projects · Tasks**; then **Recent projects** (the 5 most recently active,
   running first: glyph + presence dot, click opens the project, ▶ on hover = New session there, "All projects"
-  link); then, smaller and at the bottom, **Ideas · History · Portfolio & CV · Settings · How Pilotage works** and the
-  two usage meters.
+  link); then, smaller and at the bottom, **Ideas · Map · History · Portfolio & CV · Settings · How Pilotage works** and
+  the two usage meters.
 - Phone (≤ 860px): compact header (brand, search icon), bottom tab bar **Home · Sessions · ＋ · Projects · More**
   (＋ = create sheet; Tasks and Ideas live in More, whose tab shows a pip with today's + doing task count), with
   safe-area insets. Content padding 20px 16px and bottom padding for the tab bar. Modals become bottom sheets with a
@@ -431,6 +431,21 @@ holds: docs/SIMPLIFY.md; the visual recipe per page is below.
 - Ideas: no subtitle; cards = title + 2-line pitch + source; evidence and first steps behind one disclosure;
   actions "Make it a project" + ⋯.
 
+### Map `/map`
+- **Header**: "Map"; actions: the period `SegmentedControl` (7 d · 30 d · 90 d · 1 y · All; in the toolbar on phone).
+  Toolbar: "Find on the map…" (typing highlights the hits and centres the best one; Enter walks through them and opens
+  each), project `select`. Below, one row of type chips (they are the legend: mark + word + count; tap hides a type).
+- **Stage**: one card, the SVG map (drag to pan, wheel or pinch to zoom, + / − / fit buttons bottom left; arrow keys,
+  + / −, 0 and Enter when the map has focus). Types use the chart hues, each with its own shape (idea = diamond, task =
+  rounded square, file = small square, workspace = ring, the rest circles); a running session gets a green ring. Labels
+  only on large, hovered, selected (and its neighbours) and searched nodes, 12px at any zoom.
+- **Panel** (right, 340px; a bottom sheet above the tab bar on phone): type word, title (status glyph for sessions,
+  workstreams and tasks), one `Meta` line, the fitting action (Open project / session / task…, New session, Resume, Open
+  in claude.ai), Focus on this / Only this project, then its links grouped by type (6 + "Show N more"); a link row
+  selects that node. Esc closes it.
+- What the server left out (`truncated`) is one `.hint` line under the map. Empty: one `EmptyState` (Show all time, or
+  New session + the Guide).
+
 ### History `/history` (the old Timeline)
 - **Header** + stat row: Active days, Prompts, Commits, Current streak, Longest streak (`StatTile`,
   `size="sm"`).
@@ -464,7 +479,7 @@ holds: docs/SIMPLIFY.md; the visual recipe per page is below.
 
 ### More `/more` (phone only)
 - `Card flush` menu of `ListRow dense` (icon tile, one line each): Tasks (state line "2 for today · 5 to do" + accent
-  count pill), Ideas (possible projects / saved ideas), History, Portfolio & CV, Settings, How Pilotage works; then
+  count pill), Ideas (possible projects / saved ideas), Map, History, Portfolio & CV, Settings, How Pilotage works; then
   the usage card (5-hour limit, Weekly limit, reset times).
 
 ## 9. Legacy classes (still styled, migrate when you rewrite a page)
@@ -491,4 +506,5 @@ chips, `EmptyState` over `Empty`.
 - [ ] AI text clamped (`Snippet` / `ClampText`); Markdown only in detail views.
 - [ ] Every control ≥ 40px tall on phone; nothing important is hover-only.
 - [ ] Empty and loading states use `EmptyState` / `LoadingCard`.
-- [ ] Keyboard: focus rings visible, Esc closes modals, Ctrl K still opens the palette.
+- [ ] Keyboard: focus rings visible, Esc closes modals, Ctrl K still opens the palette. A dialog (`Modal`) takes focus
+  when it opens, keeps Tab inside, gives focus back to what opened it, and is named by its title.

@@ -110,7 +110,8 @@ How the pieces fit together: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 server/                 Node server (ES modules, no framework)
   index.js              listeners, auth, core routes, SSE (/api/events), background loops
   routes/               feature modules loaded at startup: plan.js (today's plan, triage), providers.js (AI
-                        providers, harnesses), scout.js (project scout), work.js (tasks, spin-offs, new projects)
+                        providers, harnesses), reports.js (standup, session export, token usage), scout.js
+                        (project scout), work.js (tasks, spin-offs, new projects)
   sources/              read-only inputs: sessions.js (transcript indexer), harness/ (Codex and Gemini adapters),
                         projects.js (project registry), git.js, live.js (running sessions), processes.js (dev servers)
   ai/                   engine.js (queue, guard, summaries, today's plan, CV), scout.js, providers.js,
@@ -220,5 +221,7 @@ folder paths (`/home/<you>`), or anything copied from your own transcripts. Use 
 npm run leak-scan
 ```
 
-It flags credentials that look real, e-mail addresses and home-folder paths. Maintainers can add a private pattern
-list (`scripts/leak-patterns.txt`, never committed to the public repository) for names that must never appear.
+It flags credentials that look real, e-mail addresses and home-folder paths, in file contents and in file names.
+Maintainers can add a private pattern list (`scripts/leak-patterns.txt`, never committed to the public repository)
+for names that must never appear. `scripts/smoke-npm.sh` (CI) also scans the packed npm package, built web app
+included (`leak-scan.sh --package DIR`).

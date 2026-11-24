@@ -9,6 +9,7 @@
 // Linux/macOS (no Windows forwarder): PILOTAGE_LAN_BIND=0.0.0.0 (or :: for IPv6 too) makes the phone listener bind
 // LAN_PORT directly, gated per connection by lanConnectionAllowed() (same idea as the forwarder). Off by default. See
 // docs/PHONE.md.
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -78,21 +79,14 @@ export async function writeForwarderConfig(patch = {}) {
 let cache = { at: 0, addrs: [] };
 
 /**
- * Firewall scope (defense in depth; the forwarder also checks every connection): the VPN ranges plus the subnet of
- * each local network adapter. "other" private addresses count too: from WSL, ipconfig's output arrives in Windows'
- * console code page, so a Cyrillic, Japanese or Chinese adapter name can't be recognised as Wi-Fi or Ethernet, and
- * leaving its subnet out would block every Wi-Fi phone (pure; tested).
+ * Firewall scope (defense in depth; the forwarder checks every connection): the VPN ranges plus Windows' own
+ * "LocalSubnet" keyword, which follows whatever network the PC is on. A fixed list of subnets froze the network where
+ * "Enable" was clicked: at home after enabling at work, Settings showed green while Windows dropped the phone's
+ * packets. Which neighbours get in is the forwarder's job (trusted Wi-Fi only), and it can't be bypassed by this (pure;
+ * tested; addrs is accepted for compatibility).
  */
 export function firewallRanges(addrs, vpnCidrs = []) {
-  const ranges = new Set(vpnCidrs);
-  const privateIp = (ip) => /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(ip);
-  for (const a of addrs) {
-    if (a.kind === 'wifi' || a.kind === 'ethernet' || (a.kind === 'other' && privateIp(a.ip))) {
-      const c = cidrOf(a.ip, a.mask);
-      if (c) ranges.add(c);
-    }
-  }
-  return ranges;
+  return new Set(['LocalSubnet', ...vpnCidrs]);
 }
 
 // Wi-Fi adapters' type words in Windows' languages ("Wireless LAN adapter", "Carte réseau sans fil",
@@ -264,6 +258,28 @@ export function lanConnectionAllowed(remote) {
   return addressAllowed(remote, allowCache.parsed);
 }
 
+/** The hash windows/forwarder.js puts in its heartbeat (same bytes: syncFiles copies the file as is). */
+export function forwarderCode(src) {
+  return crypto.createHash('sha256').update(src).digest('hex').slice(0, 16);
+}
+let shipped = null;
+function shippedCode() {
+  if (shipped === null) {
+    try {
+      shipped = forwarderCode(fs.readFileSync(path.join(ROOT, 'windows', 'forwarder.js')));
+    } catch {
+      shipped = '';
+    }
+  }
+  return shipped;
+}
+
+/** A running forwarder that serves another port or runs older code than the one shipped (pure; tested). */
+export function forwarderOutdated(hb, running, want = { targetPort: LAN_INTERNAL_PORT, code: shippedCode() }) {
+  if (!running) return false;
+  return hb?.targetPort !== want.targetPort || (!!want.code && hb?.code !== want.code);
+}
+
 export function forwarderStatus() {
   if (!WIN_PILOTAGE_DIR) return { installed: false, running: false };
   const hb = readJSONSync(path.join(WIN_PILOTAGE_DIR, 'forwarder.json'), null);
@@ -280,7 +296,7 @@ export function forwarderStatus() {
     refused: hb?.refused || 0,
     ssidTrusted: !!hb?.ssidTrusted,
     onWifi: !!hb?.onWifi,
-    outdated: running && hb?.targetPort !== LAN_INTERNAL_PORT,
+    outdated: forwarderOutdated(hb, running),
   };
 }
 
@@ -309,6 +325,17 @@ async function winPath(p) {
   return (await run('wslpath', ['-w', p])).stdout.trim();
 }
 
+/**
+ * What ensureForwarder does (pure; tested). ruleOk: the firewall rule exists (or force). A running forwarder that is
+ * outdated is only stopped once its replacement can start: when the rule check fails (netsh timed out, the rule
+ * was removed) the old one keeps serving phones instead of leaving none.
+ */
+export function forwarderPlan(st, ruleOk) {
+  if (st.running && !st.outdated) return 'already';
+  if (!ruleOk) return st.running ? 'keep' : 'needs-firewall';
+  return st.running ? 'restart' : 'start';
+}
+
 /** Start the forwarder (hidden). By default only once the firewall rule exists (otherwise it can't be reached). */
 export async function ensureForwarder({ force = false } = {}) {
   if (!WIN_PILOTAGE_DIR || !fs.existsSync(WIN_NODE)) return { ok: false, error: 'Windows Node.js not found' };
@@ -321,9 +348,14 @@ export async function ensureForwarder({ force = false } = {}) {
   }
   await ensureConfig();
   const st = forwarderStatus();
-  if (st.running && !st.outdated) return { ok: true, already: true };
-  if (st.outdated) await stopForwarder();
-  if (!force && !(await firewallRuleExists())) return { ok: false, needsFirewall: true, error: 'Phone access is not enabled yet (needs the one-time firewall rule)' };
+  const plan = forwarderPlan(st, st.running && !st.outdated ? true : force || (await firewallRuleExists()));
+  if (plan === 'already') return { ok: true, already: true };
+  if (plan === 'keep') return { ok: true, already: true, outdated: true }; // an older forwarder beats none
+  if (plan === 'needs-firewall') return { ok: false, needsFirewall: true, error: 'Phone access is not enabled yet (needs the one-time firewall rule)' };
+  if (plan === 'restart') {
+    log.info('forwarder runs older code (or serves another port): restarting it');
+    await stopForwarder();
+  }
   const exe = await winPath(FWD_EXE);
   const js = await winPath(FWD_JS);
   const ps = `Start-Process -WindowStyle Hidden -FilePath '${exe.replace(/'/g, "''")}' -ArgumentList '"${js.replace(/'/g, "''")}"'`;

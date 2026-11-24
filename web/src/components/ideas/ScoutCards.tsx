@@ -3,7 +3,8 @@
 // from; the reason (why, evidence, first steps) is one disclosure away, never a score. Actions: Make it a project
 // (spin-off / new project dialog, prefilled, with scoutId so the server marks it accepted) and a ⋯ menu with Keep as
 // idea · Not a project (with undo).
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { FolderPlus, Lightbulb, MoreHorizontal, Telescope, X } from 'lucide-react';
@@ -27,6 +28,8 @@ export interface ScoutCardsProps {
   limit?: number;
   /** Ideas page: show the section with an empty state (and what the scout looked at) when there is nothing open. */
   showEmpty?: boolean;
+  /** Told when the "Make it a project" dialog opens and closes (the project Overview keeps this list mounted meanwhile). */
+  onDialog?: (open: boolean) => void;
 }
 
 export const SCOUT_KIND: Record<ScoutKind, { label: string; hint: string }> = {
@@ -228,7 +231,7 @@ function EmptyRuns({ runs }: { runs: ScoutRun[] }) {
   );
 }
 
-export function ScoutCards({ projectId, compact = false, limit, showEmpty = false }: ScoutCardsProps) {
+export function ScoutCards({ projectId, compact = false, limit, showEmpty = false, onDialog }: ScoutCardsProps) {
   const { data, error } = useScout(projectId);
   const [expanded, setExpanded] = useState(false);
   const [making, setMaking] = useState<ScoutCandidate | null>(null);
@@ -238,24 +241,35 @@ export function ScoutCards({ projectId, compact = false, limit, showEmpty = fals
   const unavailable = error instanceof ApiError && error.status === 404;
   const emptyRuns = (data?.scouted || []).filter((r) => r.candidates === 0 && (!projectId || r.projectId === projectId));
 
+  useEffect(() => onDialog?.(!!making), [making, onDialog]);
   const dialog = making && <MakeProjectDialog c={making} onClose={() => setMaking(null)} />;
-  if (unavailable || (!data && !showEmpty)) return null;
+  // The dialog keeps one place in the tree whatever the list shows. Creating the project accepts its candidate, so
+  // the list can empty while the success screen is open; a dialog that moved was remounted in its empty form.
+  const keep = (body: ReactNode) => (
+    <>
+      {body}
+      {dialog}
+    </>
+  );
+  if (unavailable || (!data && !showEmpty)) return keep(null);
 
   if (!open.length) {
     if (compact) {
       // one quiet line: what the scout weighed for this project and why it left it out
       const r = emptyRuns[0];
-      return r?.note ? (
-        <div className="scout-empty-line small muted">
-          <Telescope size={14} className="faint" aria-hidden="true" />
-          <span>
-            No possible projects in {r.projectName}: {r.note}
-          </span>
-        </div>
-      ) : null;
+      return keep(
+        r?.note ? (
+          <div className="scout-empty-line small muted">
+            <Telescope size={14} className="faint" aria-hidden="true" />
+            <span>
+              No possible projects in {r.projectName}: {r.note}
+            </span>
+          </div>
+        ) : null,
+      );
     }
-    if (!showEmpty) return null;
-    return (
+    if (!showEmpty) return keep(null);
+    return keep(
       <Section title="Possible projects">
         <Card>
           <EmptyState
@@ -266,8 +280,7 @@ export function ScoutCards({ projectId, compact = false, limit, showEmpty = fals
           />
         </Card>
         <EmptyRuns runs={emptyRuns} />
-        {dialog}
-      </Section>
+      </Section>,
     );
   }
 
@@ -283,17 +296,16 @@ export function ScoutCards({ projectId, compact = false, limit, showEmpty = fals
           {expanded ? 'Show fewer' : `Show ${open.length - max} more`}
         </button>
       )}
-      {dialog}
       <TaskUndoToast />
     </>
   );
-  if (compact) return <div className="scout-cards compact">{cards}</div>;
-  return (
+  if (compact) return keep(<div className="scout-cards compact">{cards}</div>);
+  return keep(
     <Section title="Possible projects" count={open.length}>
       <div className="scout-cards">
         {cards}
         {!projectId && <EmptyRuns runs={emptyRuns} />}
       </div>
-    </Section>
+    </Section>,
   );
 }

@@ -17,7 +17,7 @@ import { findBin } from './sources/harness/common.js';
 import { detectTerminal, openInTerminal } from './terminal.js';
 
 const SUBCOMMANDS = new Set(['agents', 'attach', 'auth', 'auto-mode', 'doctor', 'gateway', 'import', 'install', 'logs', 'mcp', 'plugin', 'plugins', 'purge', 'respawn', 'rm', 'setup-token', 'stop', 'kill', 'ultrareview', 'update', 'upgrade', 'remote-control', 'config']);
-const MODELS = new Set(['', 'opus', 'sonnet', 'haiku', 'fable', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5', 'claude-fable-5-2']);
+export const MODELS = new Set(['', 'opus', 'sonnet', 'haiku', 'fable', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5', 'claude-fable-5-2']);
 /** Modes a launch may ask for. "manual" is Pilotage's older name for Claude Code's ask mode ("default"). */
 export const PERMISSION_MODES = new Set(['bypassPermissions', 'acceptEdits', 'auto', 'manual', 'default', 'plan', 'dontAsk']);
 const UUID_RX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -163,6 +163,13 @@ export function getLaunch(id) {
 export function listLaunches() {
   return [...launches.values()].sort((a, b) => b.createdAt - a.createdAt).slice(0, 30);
 }
+
+/**
+ * The mode for a session whose first prompt (or CLAUDE.md) holds text Pilotage's AI wrote from transcripts: those can
+ * carry instructions copied from a web page, a README or a log. It asks before acting whatever Settings says; only
+ * "Plan first", which is stricter, is kept.
+ */
+export const askFirstMode = (mode) => (mode === 'plan' ? 'plan' : 'default');
 
 function permissionArgs(mode) {
   if (mode === 'bypassPermissions') return ['--dangerously-skip-permissions'];
@@ -421,14 +428,4 @@ export async function openExplorer(cwd) {
   if (!winPath) throw new Error('wslpath failed');
   // explorer.exe returns exit code 1 even on success
   await run(EXPLORER_EXE, [winPath], { timeout: 15000, cwd: '/mnt/c/' });
-}
-
-export async function openUrlOnPC(url) {
-  if (!/^https?:\/\/[^\s"]+$/.test(url)) throw new Error('bad url');
-  if (!IS_WSL) {
-    const r = await run(OPENER, [url], { timeout: 15000 });
-    if (r.code !== 0) throw new Error(`Could not open a browser (${OPENER})`);
-    return;
-  }
-  await run(EXPLORER_EXE, [url], { timeout: 15000, cwd: '/mnt/c/' });
 }

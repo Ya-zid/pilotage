@@ -4,14 +4,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { ChevronRight, MoreHorizontal, Play, Plus, Smartphone, Sparkles, SquareTerminal, SunDim, X } from 'lucide-react';
+import { ChevronRight, MoreHorizontal, Play, Plus, Smartphone, Sparkles, SquareTerminal, SunDim, TriangleAlert, X } from 'lucide-react';
 import { useBootstrap, useDevices, useNetOnce } from '../../api';
 import { pickupHide, planFocus, useWork } from '../../api-extra';
 import { useApp } from '../AppContext';
 import { Button, Callout, Card, EmptyState, Meta, PageHeader, ProjectGlyph, Section, StatusIcon, useToast } from '../ui';
 import { Menu, TaskRow, TaskSheet, useProjectIndex } from '../tasks/TaskBits';
 import { friendly, usePref, useTaskActions } from '../tasks/model';
-import type { Overview, SessionSummary } from '../../types';
+import type { AttentionItem, Overview, SessionSummary } from '../../types';
 import type { WorkItem } from '../../types-extra';
 import type { PickupItem, PlanProposal } from '../../types-v3';
 import { ago, fmtDateTime, isoDay, plural } from '../../util';
@@ -195,6 +195,20 @@ export function Welcome({ phone }: { phone: boolean }) {
         }
       />
     </Card>
+  );
+}
+
+/** Running sessions in one checkout editing the same files (server: views.collisionsOf): say it before they collide. */
+export function Collisions({ items }: { items: AttentionItem[] }) {
+  if (!items.length) return null;
+  return (
+    <Callout tone="warn" icon={<TriangleAlert size={18} />} title={items.length === 1 ? 'Two sessions are editing the same files' : `${items.length} projects have sessions editing the same files`}>
+      {items.map((a) => (
+        <div key={`${a.projectId}:${a.text}`}>
+          <Link to={`/projects/${a.projectId}`}>{a.projectName}</Link>: {a.text}
+        </div>
+      ))}
+    </Callout>
   );
 }
 
@@ -430,9 +444,9 @@ function SuggestionRow({ p, open, onToggle, onAccept, onDismiss }: { p: PlanProp
             {
               key: 'start',
               label: 'Start a session',
-              sub: 'With Claude’s suggested first message',
+              sub: 'With Claude’s suggested first message (it asks before acting)',
               icon: <Play size={15} />,
-              onSelect: () => openNewSession({ projectId: p.projectId || undefined, prompt: p.action, name: sessionName(p.title) }),
+              onSelect: () => openNewSession({ projectId: p.projectId || undefined, prompt: p.action, name: sessionName(p.title), aiPrompt: true }),
             },
             { key: 'dismiss', label: 'Not today', sub: 'Hide it until tomorrow', icon: <X size={15} />, onSelect: onDismiss },
           ]}

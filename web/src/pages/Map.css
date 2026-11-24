@@ -1,0 +1,432 @@
+/* Map page (pages/Map.tsx, components/map/*). Tokens only (DESIGN.md §3). The Map is a chart: types get the chart
+   hues, each paired with a shape and a word (the chips double as the legend). */
+.mp-stage,
+.mp-chips,
+.mp-panel {
+  --mp-workspace: var(--text-2);
+  --mp-project: var(--accent);
+  --mp-thread: var(--violet);
+  --mp-topic: var(--teal);
+  --mp-session: var(--blue);
+  --mp-chat: color-mix(in srgb, var(--violet) 55%, var(--red));
+  --mp-task: var(--green);
+  --mp-idea: var(--amber);
+  --mp-file: var(--text-3);
+}
+.t-workspace { --mp-c: var(--mp-workspace); }
+.t-project { --mp-c: var(--mp-project); }
+.t-thread { --mp-c: var(--mp-thread); }
+.t-topic { --mp-c: var(--mp-topic); }
+.t-session { --mp-c: var(--mp-session); }
+.t-chat { --mp-c: var(--mp-chat); }
+.t-task { --mp-c: var(--mp-task); }
+.t-idea { --mp-c: var(--mp-idea); }
+.t-file { --mp-c: var(--mp-file); }
+
+/* toolbar + chips */
+.mp-toolbar .mp-search {
+  flex: 1 1 260px;
+  max-width: 420px;
+  position: relative;
+}
+/* Esc clears the search; the browser's own clear button sat on top of the hit count */
+.mp-search input::-webkit-search-cancel-button {
+  display: none;
+}
+.mp-search input {
+  padding-right: 56px;
+}
+.mp-hits {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  pointer-events: none;
+}
+.mp-select {
+  max-width: 240px;
+}
+.mp-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: calc(var(--s-3) - var(--flow-gap));
+}
+.mp-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  font-weight: 550;
+  cursor: pointer;
+  transition: background var(--dur-1) var(--ease), color var(--dur-1) var(--ease), opacity var(--dur-1) var(--ease);
+}
+.mp-chip:hover {
+  background: var(--surface-2);
+}
+.mp-chip.off {
+  opacity: 0.55;
+  color: var(--text-3);
+}
+.mp-chip.off .mp-mark {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--mp-c);
+}
+
+/* the type mark: same colour and shape as the node */
+.mp-mark {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--mp-c);
+  flex: none;
+  display: inline-block;
+}
+.mp-mark.t-workspace {
+  background: transparent;
+  box-shadow: inset 0 0 0 2px var(--mp-c);
+}
+.mp-mark.t-task {
+  border-radius: 3px;
+}
+.mp-mark.t-file {
+  border-radius: 1px;
+  width: 8px;
+  height: 8px;
+}
+.mp-mark.t-idea {
+  border-radius: 1px;
+  width: 8px;
+  height: 8px;
+  transform: rotate(45deg);
+}
+
+/* the stage: the map card, with the panel on its right (a bottom sheet on the phone) */
+.mp-stage {
+  position: relative;
+  display: flex;
+  height: clamp(420px, calc(100vh - 250px), 900px);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--card-shadow);
+  overflow: hidden;
+}
+.mp-canvas {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  outline: none;
+}
+.mp-canvas:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+.mp-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+  user-select: none;
+  cursor: grab;
+}
+.mp-svg:active {
+  cursor: grabbing;
+}
+.mp-edge {
+  stroke: var(--border-strong);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+.mp-edge.k-spinoff,
+.mp-edge.k-chat {
+  stroke: var(--text-4);
+}
+.mp-edge.on {
+  stroke: var(--text-3);
+  stroke-width: 1.5;
+}
+.mp-edge.dim {
+  opacity: 0.25;
+}
+.mp-node {
+  cursor: pointer;
+}
+.mp-node > :not(.mp-live) {
+  fill: var(--mp-c);
+  stroke: var(--surface);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+  transition: opacity var(--dur-1) var(--ease);
+}
+.mp-node.t-workspace > circle {
+  fill: color-mix(in srgb, var(--mp-c) 12%, var(--surface));
+  stroke: var(--mp-c);
+  stroke-width: 2;
+}
+.mp-node .mp-live {
+  fill: none;
+  stroke: var(--green);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+.mp-node:hover > :not(.mp-live) {
+  stroke: var(--text);
+}
+.mp-node.match > :not(.mp-live) {
+  stroke: var(--text);
+  stroke-width: 2;
+}
+.mp-node.sel > :not(.mp-live) {
+  stroke: var(--text);
+  stroke-width: 3;
+}
+.mp-node.dim {
+  opacity: 0.22;
+}
+.mp-label {
+  fill: var(--text-2);
+  stroke: var(--surface);
+  paint-order: stroke;
+  stroke-linejoin: round;
+  text-anchor: middle;
+  font-weight: 500;
+  pointer-events: none;
+}
+.mp-label.t-workspace,
+.mp-label.t-project {
+  fill: var(--text);
+  font-weight: 600;
+}
+.mp-zoom {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mp-focusbar {
+  position: absolute;
+  left: 12px;
+  top: 12px;
+  right: 12px;
+  max-width: 420px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 4px 4px 12px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-md);
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+.mp-focusbar .truncate {
+  flex: 1;
+  min-width: 0;
+}
+.mp-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.mp-note {
+  margin-top: calc(var(--s-3) - var(--flow-gap));
+}
+
+/* panel */
+.mp-panel {
+  width: 340px;
+  flex: none;
+  border-left: 1px solid var(--border);
+  background: var(--surface);
+  overflow-y: auto;
+  padding: var(--s-4) var(--s-5) var(--s-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+}
+.mp-grab {
+  display: none;
+}
+.mp-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: -4px -8px -4px 0;
+}
+.mp-kind {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+}
+.mp-title {
+  margin: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: var(--fs-md);
+  font-weight: 650;
+  line-height: 1.35;
+  color: var(--text);
+  overflow-wrap: anywhere;
+  outline: none;
+}
+.mp-title > svg {
+  margin-top: 3px;
+  flex: none;
+}
+.mp-actions,
+.mp-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.mp-tools {
+  margin-top: calc(-1 * var(--s-1));
+}
+.mp-links {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  margin-top: var(--s-2);
+  padding-top: var(--s-4);
+  border-top: 1px solid var(--border);
+}
+.mp-group ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.mp-group-title {
+  margin: 0 0 4px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-sm);
+  font-weight: 650;
+  color: var(--text);
+}
+.mp-link {
+  width: 100%;
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  margin: 0 -8px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.mp-link:hover {
+  background: var(--hover);
+}
+.mp-link-t {
+  flex: 1;
+  min-width: 0;
+}
+.mp-link-at {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  flex: none;
+}
+.mp-more {
+  border: 0;
+  background: none;
+  padding: 4px 0;
+  color: var(--accent-text);
+  font: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+.mp-none {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--text-3);
+}
+
+@media (max-width: 860px) {
+  .mp-toolbar {
+    flex-wrap: wrap;
+  }
+  .mp-toolbar .mp-search {
+    flex: 1 1 100%;
+    max-width: none;
+  }
+  .mp-select {
+    /* the period control moves to its own line rather than squeezing the project name ("All projec…") */
+    flex: 1 1 160px;
+    max-width: none;
+    min-height: 40px;
+  }
+  .mp-chips {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    margin-left: -16px;
+    margin-right: -16px;
+    padding: 0 16px;
+  }
+  .mp-chip {
+    height: 36px;
+    flex: none;
+  }
+  .mp-stage {
+    /* ends above the tab bar, so the whole map shows once the page is scrolled to it */
+    height: clamp(320px, calc(100dvh - 300px - var(--tabbar-h, 64px)), 760px);
+    border-radius: var(--r-md);
+  }
+  .mp-zoom .btn {
+    width: 40px;
+    height: 40px;
+  }
+  /* the panel becomes a bottom sheet above the tab bar */
+  .mp-panel {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: calc(var(--tabbar-h, 64px) + env(safe-area-inset-bottom));
+    z-index: 30;
+    width: auto;
+    max-height: 56dvh;
+    border-left: 0;
+    border-top: 1px solid var(--border);
+    border-radius: var(--r-xl) var(--r-xl) 0 0;
+    background: var(--surface-raised);
+    box-shadow: var(--shadow-lg);
+    padding: 6px var(--s-4) var(--s-5);
+  }
+  .mp-grab {
+    display: block;
+  }
+  .mp-link {
+    min-height: 40px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mp-chip,
+  .mp-node > * {
+    transition: none;
+  }
+}

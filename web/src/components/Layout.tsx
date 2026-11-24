@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation, useMatch, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { ArrowRight, Briefcase, CircleHelp, FolderKanban, History, Home, Lightbulb, ListChecks, MessagesSquare, MoreHorizontal, Play, Plus, Search, Settings, SquareTerminal, TriangleAlert } from 'lucide-react';
+import { ArrowRight, Briefcase, CircleHelp, FolderKanban, History, Home, Lightbulb, ListChecks, MessagesSquare, MoreHorizontal, Network, Play, Plus, Search, Settings, SquareTerminal, TriangleAlert } from 'lucide-react';
 import { useBootstrap, useOverview, useProjects } from '../api';
 import type { ProjectSummary, SessionDetail, SessionSummary } from '../types';
 import { useApp } from './AppContext';
@@ -170,6 +170,7 @@ function Sidebar() {
       <div className="sidebar-foot">
         <nav className="nav-secondary" aria-label="More">
           {sub('/ideas', <Lightbulb size={15} />, 'Ideas', count(possible, plural(possible, 'new possible project')))}
+          {sub('/map', <Network size={15} />, 'Map')}
           {sub('/history', <History size={15} />, 'History')}
           {sub('/portfolio', <Briefcase size={15} />, 'Portfolio & CV')}
           {sub('/settings', <Settings size={15} />, 'Settings')}
@@ -216,7 +217,7 @@ function BottomNav() {
   const loc = useLocation();
   const [createOpen, setCreateOpen] = useState(false);
   const plusRef = useRef<HTMLButtonElement>(null);
-  const moreActive = ['/tasks', '/ideas', '/history', '/timeline', '/portfolio', '/settings', '/guide', '/more'].some((p) => loc.pathname.startsWith(p));
+  const moreActive = ['/tasks', '/ideas', '/map', '/history', '/timeline', '/portfolio', '/settings', '/guide', '/more'].some((p) => loc.pathname.startsWith(p));
   const todayTasks = useTodayTaskCount();
   const item = (to: string, icon: React.ReactNode, label: string, extra?: React.ReactNode, end = false) => (
     <NavLink to={to} end={end} className={({ isActive }) => (isActive ? 'active' : '')}>

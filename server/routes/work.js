@@ -2,8 +2,7 @@
 import path from 'node:path';
 import { HOME, CLAUDE_DIR } from '../config.js';
 import { clip, hash, oneLine, isInside, readJSONSync } from '../util.js';
-import { launch, getLaunch, sanitizeName } from '../launch.js';
-import { trustFolder } from '../claude-trust.js';
+import { launch, getLaunch, sanitizeName, askFirstMode } from '../launch.js';
 import { callAI } from '../ai/providers.js';
 import { getWorkStore, STATUSES, OPEN_STATUSES, AI_KINDS } from '../work/store.js';
 import { reconcile, liveInput } from '../work/extract.js';
@@ -20,6 +19,9 @@ export default function ({ route, ctx }) {
   const { index, registry, store, live, ai, views, broadcast, json, fail, log } = ctx;
   const work = getWorkStore();
   ctx.workView = (it) => view(it); // shared with routes/plan.js (Today + triage)
+  ctx.workSort = (a, b) => sortItems(a, b); // and with routes/reports.js (standup)
+  // Folders Pilotage created stay projects after a restart, wherever they are (the scan only goes 3 levels deep).
+  for (const r of work.data.spinoffs) if (r.to) registry.known.add(r.to);
 
   // ------------------------------------------------------------ helpers
   const projectName = (p) => store.project(p).name || registry.projects.get(p)?.name || path.basename(p) || p;
@@ -316,6 +318,9 @@ export default function ({ route, ctx }) {
     if (it.detail && it.detail !== it.title) lines.push('', it.detail);
     if (!resumeId && it.source.sessionId) lines.push('', `This came out of an earlier session (${it.source.sessionId}); check the current state of the folder before acting.`);
     lines.push('', `Do this task. If anything is unclear or risky, ask ${userName()} first. Say clearly when it is done.`);
+    // As /api/launch: answer Claude Code's "trust this folder?" first when Settings says so (or the user ticked it),
+    // or a Start from the phone (background by default) waits for an answer at the PC.
+    await ctx.trustBeforeLaunch?.(cwd, body.trust === true, body.trust === true ? `asked from ${dev?.name || 'a device'}` : 'setting');
     const rec = await launch({
       cwd,
       name: sanitizeName(it.title, projectName(proj.path)),
@@ -324,7 +329,8 @@ export default function ({ route, ctx }) {
       resumeId,
       fork: false,
       model: typeof body.model === 'string' ? body.model : store.settings.launch.model,
-      permissionMode: store.settings.launch.permissionMode,
+      // A suggested task's text was written by the AI from transcripts: it asks before acting, whatever Settings says.
+      permissionMode: AI_KINDS.has(it.source.kind) ? askFirstMode(store.settings.launch.permissionMode) : store.settings.launch.permissionMode,
       from: dev?.name,
     });
     if (rec.state === 'error') throw new HttpError(500, rec.error || 'Launch failed');
@@ -368,15 +374,10 @@ export default function ({ route, ctx }) {
   async function finishCreate({ plan, name, goal, workspace, origin, src, related, ideaText, body, dev, rel }) {
     const h = await buildHandoff({ name, goal, origin, src, related, ideaText, callAI: body.useAI === false ? null : aiCaller('haiku') });
     const made = await createProjectFolder(plan, h.markdown, { gitInit: !!body.gitInit });
+    registry.known.add(made.dir); // registered even below the scan depth or in a dot-folder
     // Pilotage just made this folder and holds only what it wrote, so it can answer Claude Code's "trust this
-    // folder?" for it when the user turned that on (or ticked it here).
-    if (body.trust === true || store.settings.launch.trustFolders) {
-      try {
-        if ((await trustFolder(made.dir)).changed) log.info(`trust: marked ${tilde(made.dir)} as trusted in Claude Code (new project)`);
-      } catch (e) {
-        log.warn(`trust: could not mark ${tilde(made.dir)} as trusted: ${e.message}`);
-      }
-    }
+    // folder?" for it when the user turned that on (or ticked it here). The same step as every launch (ctx).
+    await ctx.trustBeforeLaunch?.(made.dir, body.trust === true, 'new project');
     const patch = { name, status: 'active' };
     if (workspace) patch.workspace = workspace;
     store.patchProject(made.dir, patch);
@@ -406,7 +407,8 @@ export default function ({ route, ctx }) {
         prompt: kickoffPrompt({ name, origin }),
         mode: body.launch,
         model: typeof body.model === 'string' ? body.model : store.settings.launch.model,
-        permissionMode: store.settings.launch.permissionMode,
+        // Its first read is CLAUDE.md, assembled from AI summaries (or written by the AI): ask before acting.
+        permissionMode: askFirstMode(store.settings.launch.permissionMode),
         from: dev?.name,
       });
       if (rec.state !== 'error') setTimeout(() => live.refresh().then((c) => c && broadcast('live')).catch(() => {}), 4000);

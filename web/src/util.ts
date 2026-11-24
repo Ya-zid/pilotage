@@ -220,3 +220,8 @@ export function copy(text: string) {
 export function isPhone() {
   return window.matchMedia('(max-width: 860px)').matches;
 }
+
+/** A token count's parts for a tooltip: "input 1,200 · output 210 · cache write 3,000 · cache read 33,000". */
+export function tokenBreakdown(t: { input: number; output: number; cacheWrite: number; cacheRead: number }) {
+  return `input ${t.input.toLocaleString()} · output ${t.output.toLocaleString()} · cache write ${t.cacheWrite.toLocaleString()} · cache read ${t.cacheRead.toLocaleString()}`;
+}

@@ -1,11 +1,11 @@
 // Settings → Sources & accounts: which coding tools Pilotage reads sessions from, and the Claude accounts it has seen.
 import React, { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { FolderTree, Layers, Sparkles, SquareTerminal, Users } from 'lucide-react';
+import { FolderTree, Layers, MessageCircle, Sparkles, SquareTerminal, Users } from 'lucide-react';
 import { api, useInvalidate } from '../../api';
-import { useHarnesses } from '../../api-extra';
+import { chatsImport, chatsRemove, useChats, useHarnesses } from '../../api-extra';
 import type { Harness, HarnessesPatch, HarnessesResponse, HarnessInfo } from '../../types-extra';
-import { EmptyState, ErrorBox, LoadingCard, Meta, Switch, useToast } from '../ui';
+import { Button, EmptyState, ErrorBox, LoadingCard, Meta, Switch, useToast } from '../ui';
 import { ago, fmtDateTime, plural } from '../../util';
 import { PathList, PcOnly, SettingRow, SettingRows, SettingsCard, errMsg, useViaLan } from './common';
 
@@ -59,6 +59,7 @@ export function SourcesSection() {
     <>
       <HarnessesCard data={data} />
       <AccountsCard data={data} />
+      <ClaudeAiCard />
     </>
   );
 }
@@ -159,6 +160,88 @@ function AccountsCard({ data }: { data: HarnessesResponse }) {
               <PathList id="extra-claude-dir" label="Extra Claude folders" paths={data.extraClaudeDirs} placeholder="/home/you/.claude-work" onSave={saveDirs} empty="No extra folders." />
             </div>
           </SettingRow>
+        </SettingRows>
+      </fieldset>
+    </SettingsCard>
+  );
+}
+
+/** claude.ai chats: import the official data export (a path on this PC). PC only; read-only (docs/API-CHATS.md). */
+function ClaudeAiCard() {
+  const { data } = useChats('', 1);
+  const st = data?.status;
+  const viaLan = useViaLan();
+  const toast = useToast();
+  const inv = useInvalidate();
+  const [path, setPath] = useState('');
+  const [busy, setBusy] = useState(false);
+  const run = async () => {
+    if (!path.trim() || busy) return;
+    setBusy(true);
+    try {
+      const r = await chatsImport(path.trim());
+      toast(`${plural(r.count, 'chat')} imported${r.linked ? `, ${r.linked} linked to a project` : ''}`);
+      setPath('');
+      inv('chats', 'graph', 'search');
+    } catch (e) {
+      toast(errMsg(e), true);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const remove = async () => {
+    if (!window.confirm('Forget the imported claude.ai chats? Your export file and claude.ai stay as they are.')) return;
+    try {
+      await chatsRemove();
+      toast('claude.ai chats removed');
+      inv('chats', 'graph', 'search');
+    } catch (e) {
+      toast(errMsg(e), true);
+    }
+  };
+  return (
+    <SettingsCard title="claude.ai chats" icon={<MessageCircle />} description="Your conversations on claude.ai, from its data export. Read-only: they show on the Map, in Sessions and in search, and open in claude.ai." actions={viaLan ? <PcOnly text="Import on the PC" /> : null}>
+      <fieldset className="stack-lg bare-fieldset" disabled={viaLan}>
+        {st?.imported ? (
+          <div className="mini-list">
+            <div className="mini-row">
+              <span className="small medium num">{plural(st.count, 'chat')}</span>
+              <Meta
+                className="grow"
+                items={[
+                  st.linked ? <span className="num">{st.linked} linked to a project</span> : null,
+                  st.importedAt ? <span title={fmtDateTime(st.importedAt)}>imported {ago(st.importedAt)}</span> : null,
+                  st.source ? <span className="mono" title={st.source.from}>{st.source.from}</span> : null,
+                ]}
+              />
+            </div>
+          </div>
+        ) : (
+          <EmptyState compact title="No export imported yet" body="On claude.ai: Settings → Privacy → Export data. The zip arrives by e-mail." />
+        )}
+        <SettingRows>
+          <SettingRow stack label="Import an export" htmlFor="claude-ai-path" hint="The zip, the folder you unzipped it to, or its conversations.json: a path on this PC. A newer import replaces this one.">
+            <form
+              className="row"
+              style={{ gap: 8 }}
+              onSubmit={(e) => {
+                e.preventDefault();
+                run();
+              }}
+            >
+              <input id="claude-ai-path" className="input mono grow" value={path} onChange={(e) => setPath(e.target.value)} placeholder="~/Downloads/data-2026-11-24.zip" autoComplete="off" spellCheck={false} />
+              <Button type="submit" loading={busy} disabled={!path.trim()}>
+                Import
+              </Button>
+            </form>
+          </SettingRow>
+          {st?.imported && (
+            <SettingRow label="Forget the import" hint="Removes the chats from Pilotage. Nothing changes on claude.ai.">
+              <Button size="sm" variant="danger" onClick={remove}>
+                Remove
+              </Button>
+            </SettingRow>
+          )}
         </SettingRows>
       </fieldset>
     </SettingsCard>

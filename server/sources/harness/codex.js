@@ -83,14 +83,19 @@ function lineHead(buf) {
   return buf.toString('latin1', 0, Math.min(buf.length, 200));
 }
 
-/** Parse a whole rollout buffer. Returns {meta, turns}. */
-export function parseCodexBuffer(buf, { id, file } = {}) {
-  const meta = baseMeta(id || 'codex-unknown', 'codex', file || null);
-  const turns = [];
+/**
+ * Parse a rollout buffer. Returns {meta, turns}. With `prev` ({meta, turns} of the bytes before `base`, already
+ * copied by the caller), the buffer holds the bytes from `base` on and the parse continues that session.
+ */
+export function parseCodexBuffer(buf, { id, file, base = 0, prev = null } = {}) {
+  const meta = prev ? prev.meta : baseMeta(id || 'codex-unknown', 'codex', file || null);
+  const turns = prev ? prev.turns : [];
   const tb = new TurnBuilder(meta, turns);
-  let exec = false;
-  let turnCwd = null;
-  const end = eachLine(buf, (line, off) => {
+  // Parser state that outlives one read: kept on the meta so an append continues with it.
+  let exec = !!meta.codex?.exec;
+  let turnCwd = meta.codex?.turnCwd || null;
+  const end = eachLine(buf, (line, rel) => {
+    const off = base + rel;
     const head = lineHead(line);
     // Encrypted reasoning blobs and ghost snapshots carry nothing we show.
     if (head.includes('"type":"response_item"') && (head.includes('"payload":{"type":"reasoning"') || head.includes('"payload":{"type":"ghost_snapshot"'))) return;
@@ -176,19 +181,54 @@ export function parseCodexBuffer(buf, { id, file } = {}) {
         tb.touch(ts);
     }
   });
-  meta.offset = end;
+  meta.offset = base + end;
+  meta.codex = { exec, turnCwd };
   meta.turnCount = turns.length;
   if (meta.cwd) meta.projectKey = meta.cwd.replace(/[^a-zA-Z0-9]/g, '-');
   pruneFiles(meta);
   return { meta, turns };
 }
 
-export async function parseCodexFile(file, id) {
-  const buf = await fsp.readFile(file);
-  const st = await fsp.stat(file);
-  const r = parseCodexBuffer(buf, { id, file });
-  r.meta.size = st.size;
-  r.meta.mtimeMs = st.mtimeMs;
+/**
+ * A rollout's bytes from `from` on: stat first, then read up to that size. `size` is where the read actually stopped,
+ * so a line Codex writes while we read (or a short read) leaves a size that differs from the next scan's stat, and that
+ * scan reads it. (Stat after the read recorded bytes never parsed, and the session's last reply stayed missing.)
+ */
+async function readRollout(file, from = 0) {
+  const fh = await fsp.open(file, 'r');
+  try {
+    const st = await fh.stat();
+    const len = Math.max(0, st.size - from);
+    const buf = Buffer.allocUnsafe(len);
+    let got = 0;
+    while (got < len) {
+      const { bytesRead } = await fh.read(buf, got, len - got, from + got);
+      if (!bytesRead) break;
+      got += bytesRead;
+    }
+    return { buf: buf.subarray(0, got), size: from + got, mtimeMs: st.mtimeMs };
+  } finally {
+    await fh.close();
+  }
+}
+
+/**
+ * Parse a rollout. With `prev` ({meta, turns} from the last scan of the same file), only the bytes after prev's offset
+ * are read: rollouts are append-only, and re-reading a whole live session every scan is what this avoids. prev is
+ * never changed (copies), so a failed read leaves the indexed session as it was.
+ */
+export async function parseCodexFile(file, id, prev = null) {
+  const from = prev ? prev.meta.offset : 0;
+  const { buf, size, mtimeMs } = await readRollout(file, from);
+  let copy = null;
+  if (prev) {
+    const turns = prev.turns.slice();
+    if (turns.length) turns[turns.length - 1] = { ...turns[turns.length - 1] };
+    copy = { meta: structuredClone(prev.meta), turns };
+  }
+  const r = parseCodexBuffer(buf, { id, file, base: from, prev: copy });
+  r.meta.size = size;
+  r.meta.mtimeMs = mtimeMs;
   return r;
 }
 
@@ -304,7 +344,7 @@ export const codexAdapter = {
   label: 'Codex CLI',
   dir: CODEX_DIR,
   empty: new Map(), // file -> "size:mtime" of rollouts without any prompt, or 'internal' (Pilotage's own AI calls)
-  async scan({ known }) {
+  async scan({ known, loadTurns }) {
     const files = await listRollouts(path.join(CODEX_DIR, 'sessions'));
     const metas = [];
     const turns = new Map();
@@ -316,14 +356,21 @@ export const codexAdapter = {
       }
       const sig = `${f.size}:${f.mtimeMs}`;
       if (this.empty.get(f.file) === sig || this.empty.get(f.file) === 'internal') continue;
-      // Pilotage's own `codex exec` AI calls (cwd = config.aiWorkDir(), data/ai-sandbox before) are not sessions.
-      const cwd = await headCwd(f.file);
+      // Grown since the last scan (same file, no turn lost): parse only the new bytes.
+      let from = null;
+      if (prev && prev.file === f.file && prev.offset > 0 && f.size >= prev.size && prev.codex && loadTurns) {
+        const old = loadTurns(f.id);
+        if (Array.isArray(old) && old.length === (prev.turnCount || 0)) from = { meta: prev, turns: old };
+      }
+      // Pilotage's own `codex exec` AI calls (cwd = config.aiWorkDir(), data/ai-sandbox before) are not sessions. (A
+      // session continued from the last scan already passed this check.)
+      const cwd = from ? null : await headCwd(f.file);
       if (cwd && isInternalPath(cleanCwd(cwd))) {
         this.empty.set(f.file, 'internal');
         continue;
       }
       try {
-        const r = await parseCodexFile(f.file, f.id);
+        const r = await parseCodexFile(f.file, f.id, from);
         if (!r.turns.length) {
           this.empty.set(f.file, sig);
           continue;

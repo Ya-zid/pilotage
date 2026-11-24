@@ -100,3 +100,19 @@ test('trust: waits for the lock Claude Code holds, and gives up without writing 
 });
 
 test.after(() => fs.rmSync(BASE, { recursive: true, force: true }));
+
+test('trust before a launch: only when asked or set to automatic, never throws, never blocks', async () => {
+  const { trustBeforeLaunch } = await import('../server/claude-trust.js');
+  const dir = mk('launch-target');
+  fs.writeFileSync(FILE, JSON.stringify({ numStartups: 1, projects: {} }, null, 2));
+  const logged = [];
+  const log = { info: (m) => logged.push(m), warn: (m) => logged.push(m) };
+  assert.equal(await trustBeforeLaunch(dir, { log }), 'skipped', 'not asked, not automatic');
+  assert.equal(trustState(dir, opts).trusted, false);
+  assert.equal(await trustBeforeLaunch(dir, { asked: true, why: 'asked from Phone', log }), 'trusted');
+  assert.equal(trustState(dir, opts).trusted, true);
+  assert.equal(await trustBeforeLaunch(dir, { asked: true, log }), 'already');
+  assert.equal(await trustBeforeLaunch(mk('auto-target'), { auto: true, log }), 'trusted', 'the "Trust folders automatically" setting');
+  assert.equal(await trustBeforeLaunch(HOME, { asked: true, log }), 'failed', 'the home folder is refused without throwing');
+  assert.match(logged.join('\n'), /asked from Phone/);
+});

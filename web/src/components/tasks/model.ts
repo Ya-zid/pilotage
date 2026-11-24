@@ -389,9 +389,9 @@ export function useTaskActions() {
 
   /** Starts a Claude session for the item. Acts on the real PC. */
   const start = useCallback(
-    async (id: string, mode: 'terminal' | 'background', resume = false) => {
+    async (id: string, mode: 'terminal' | 'background', resume = false, trust = false) => {
       try {
-        const r = await api<{ item: WorkItem; launch: LaunchRecord }>(`/api/work/${id}/start`, { method: 'POST', body: { mode, resume } });
+        const r = await api<{ item: WorkItem; launch: LaunchRecord }>(`/api/work/${id}/start`, { method: 'POST', body: { mode, resume, trust } });
         applyLocal(id, () => r.item);
         qc.invalidateQueries({ queryKey: ['live'] });
         return r;

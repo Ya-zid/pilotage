@@ -157,6 +157,40 @@ test('codex adapter scan: incremental, skips empty rollouts and Pilotage\'s own 
   }
 });
 
+test('codex adapter: a line Codex writes while the rollout is being read is picked up by the next scan', async () => {
+  const fsp = (await import('node:fs/promises')).default;
+  const uuid = '44444444-4444-7444-8444-444444444444';
+  const day = path.join(process.env.CODEX_HOME, 'sessions', '2026', '11', '03');
+  fs.mkdirSync(day, { recursive: true });
+  const file = path.join(day, `rollout-2026-11-03T09-00-00-${uuid}.jsonl`);
+  const head = line({ timestamp: '2026-11-03T09:00:00.000Z', type: 'session_meta', payload: { id: uuid, cwd: '/home/alex/demo', cli_version: '0.58.0', source: 'cli' } }) +
+    line({ timestamp: '2026-11-03T09:00:01.000Z', type: 'event_msg', payload: { type: 'user_message', message: 'Fix the build', images: [] } });
+  fs.writeFileSync(file, head + line({ timestamp: '2026-11-03T09:00:09.000Z', type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Fixed the build.' }] } }));
+  // The read ends partway through the reply line, as when Codex is still writing it; the file is complete just after.
+  const cut = Buffer.byteLength(head) + 20;
+  const { open, readFile } = fsp;
+  fsp.readFile = async (f, ...r) => (f === file ? (await readFile(f)).subarray(0, cut) : readFile(f, ...r));
+  fsp.open = async (...a) => {
+    const fh = await open(...a);
+    if (a[0] !== file) return fh;
+    const read = fh.read.bind(fh);
+    fh.read = (buf, off, len, pos) => (pos >= cut ? Promise.resolve({ bytesRead: 0, buffer: buf }) : read(buf, off, Math.min(len, cut - pos), pos));
+    return fh;
+  };
+  let first;
+  try {
+    first = await codexAdapter.scan({ known: new Map() });
+  } finally {
+    Object.assign(fsp, { open, readFile });
+  }
+  const id = `codex-${uuid}`;
+  const m = first.metas.find((x) => x.id === id);
+  assert.equal(first.turns.get(id)[0].a, '', 'the cut read has no reply yet');
+  const next = await codexAdapter.scan({ known: new Map([[id, m]]) });
+  assert.equal(next.turns.get(id)?.[0].a, 'Fixed the build.', 'the next scan reads the rest of the rollout');
+  fs.rmSync(file);
+});
+
 test('codex exec sessions count as automated runs', async () => {
   const { meta, turns } = await parseCodexFile(codexFixture({ source: 'exec', partial: false }), `codex-${UUID}`);
   assert.equal(meta.counts.h, 0);

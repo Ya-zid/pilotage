@@ -26,7 +26,7 @@
 //   rerun the tests): it becomes a new item. Loops matching a task they dropped still attach to it, so it stays gone.
 import { hash, oneLine, clip } from '../util.js';
 import { HOME, WIN_HOME } from '../config.js';
-import { OPEN_STATUSES, AI_KINDS, normalizeItem } from './store.js';
+import { OPEN_STATUSES, AI_KINDS, MAX_TOMBSTONES, normalizeItem } from './store.js';
 import { userName, nameRxSource } from '../profile.js';
 
 const DAY = 86400e3;
@@ -416,7 +416,7 @@ function evidenceFor(item, input, ix, current, stats, now = Date.now()) {
 function isTombstoned(data, c, bases = []) {
   for (const t of data.tombstones || []) {
     if (t.keys?.includes(c.key)) return true;
-    if (relatedPaths(t.projectPath, c.projectPath, bases) && similar(t.title, c.title)) return true;
+    if (t.title && relatedPaths(t.projectPath, c.projectPath, bases) && similar(t.title, c.title)) return true; // key-only ones match by key
   }
   return false;
 }
@@ -439,10 +439,16 @@ export function reconcile(data, input, now = Date.now()) {
     let item = byKey.get(c.key);
     if (item) {
       // Same source, maybe re-digested with new wording: refresh unless the user took ownership. A title the cleanup
-      // pass shortened stays (a re-digest of an old block would bring the long wording back).
+      // pass shortened stays while the step is the same work (a re-digest of an old block would bring the long
+      // wording back); a different next step (the detail is what Start sends) takes the new title.
       if (!item.userEdited && item.keys[0] === c.key && AI_KINDS.has(item.source.kind)) {
-        const title = item.titleBy === 'short' ? item.title : c.title;
+        const keepShort = item.titleBy === 'short' && (item.detail === c.detail || similar(stepText(item.detail), stepText(c.detail), { loose: true }));
+        const title = keepShort ? item.title : c.title;
         const who = c.who || item.who || null;
+        if (item.titleBy === 'short' && !keepShort) {
+          item.titleBy = null;
+          stats.changed = true;
+        }
         if (item.title !== title || item.detail !== c.detail || item.who !== who) {
           item.title = title;
           item.detail = c.detail;
@@ -554,9 +560,21 @@ export function reconcile(data, input, now = Date.now()) {
   stats.expired = capSuggestions(data.items, now);
   if (stats.expired) stats.changed = true;
 
-  // Housekeeping: forget long-closed AI items nobody touched (their sources are far too old to come back).
+  // Housekeeping: forget long-closed AI items nobody touched (their sources are far too old to come back). Expired and
+  // "dismiss old" suggestions too: most untouched suggestions end that way, and kept forever they slow every pass and
+  // grow work.json. Their source can still be listed (a brief step), so they leave a key-only tombstone.
   const before = data.items.length;
-  data.items = data.items.filter((it) => !(AI_KINDS.has(it.source.kind) && !it.userEdited && it.closedBy === 'ai' && !OPEN_STATUSES.has(it.status) && now - (it.updatedAt || 0) > PRUNE_CLOSED_AFTER));
+  const tombs = [];
+  data.items = data.items.filter((it) => {
+    if (!AI_KINDS.has(it.source.kind) || it.userEdited || OPEN_STATUSES.has(it.status) || now - (it.updatedAt || 0) <= PRUNE_CLOSED_AFTER) return true;
+    if (it.closedBy === 'ai') return false;
+    if (it.closedBy === 'expired' || (it.closedBy === 'user' && it.dismissReason === 'old')) {
+      if (it.keys.length) tombs.push({ keys: it.keys, projectPath: it.projectPath, at: now });
+      return false;
+    }
+    return true;
+  });
+  if (tombs.length) data.tombstones = [...(data.tombstones || []), ...tombs].slice(-MAX_TOMBSTONES);
   stats.pruned = before - data.items.length;
   if (stats.pruned) stats.changed = true;
   data.meta = { ...(data.meta || {}), lastExtractAt: now, lastExtract: { ...stats, at: now } };

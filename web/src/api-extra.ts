@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from './api';
 import type { WorkList, Spinoff, ProvidersResponse, HarnessesResponse, WorkItem } from './types-extra';
 import type { ScoutList } from './types-v3';
+import type { ChatSummary, ChatsStatus, Graph } from './types-map';
 
 export const useWork = (params: { project?: string; status?: string; q?: string } = {}) => {
   const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v) as [string, string][]).toString();
@@ -11,6 +12,18 @@ export const useWork = (params: { project?: string; status?: string; q?: string 
 export const useSpinoffs = (projectId?: string) =>
   useQuery({ queryKey: ['spinoffs', projectId || 'all'], queryFn: () => api<{ spinoffs: Spinoff[] }>(`/api/spinoffs${projectId ? `?project=${projectId}` : ''}`).then((r) => r.spinoffs ?? (r as unknown as Spinoff[])) });
 export const useProviders = () => useQuery({ queryKey: ['providers'], queryFn: () => api<ProvidersResponse>('/api/providers') });
+/** The Map (docs/API-GRAPH.md). days: 7 | 30 | 90 | 365 | 0 (all time); project: one project and what it touches. */
+export const useGraph = (days: string, project?: string) =>
+  useQuery({
+    queryKey: ['graph', days, project || 'all'],
+    queryFn: () => api<Graph>(`/api/graph?days=${encodeURIComponent(days)}${project ? `&project=${encodeURIComponent(project)}` : ''}`),
+    staleTime: 30_000,
+  });
+/** claude.ai chats from the data export (docs/API-CHATS.md). Import / remove are PC-only. */
+export const useChats = (q = '', limit = 200, enabled = true) =>
+  useQuery({ queryKey: ['chats', q, limit], queryFn: () => api<{ chats: ChatSummary[]; status: ChatsStatus }>(`/api/chats?limit=${limit}${q ? `&q=${encodeURIComponent(q)}` : ''}`), enabled, staleTime: 60_000 });
+export const chatsImport = (path: string) => api<{ ok: boolean; count: number; linked: number; skipped: number; status: ChatsStatus }>('/api/chats/import', { method: 'POST', body: { path } });
+export const chatsRemove = () => api<{ ok: boolean }>('/api/chats', { method: 'DELETE' });
 export const useHarnesses = () => useQuery({ queryKey: ['harnesses'], queryFn: () => api<HarnessesResponse>('/api/harnesses') });
 
 // ---- v3 (docs/SIMPLIFY.md §10). All mutations: the server broadcasts work / overview / scout, so lists refresh by SSE;

@@ -31,6 +31,9 @@ export type Digest = {
   highlights?: string[];
 };
 
+/** Tokens recorded in Claude Code transcripts (API usage on assistant lines). */
+export type TokenCounts = { input: number; output: number; cacheWrite: number; cacheRead: number; total: number };
+
 export type SessionSummary = {
   id: string;
   title: string;
@@ -61,6 +64,7 @@ export type SessionSummary = {
   match?: string | null;
   harness?: 'claude' | 'codex' | 'gemini';
   account?: string | null;
+  tokens?: TokenCounts | null; // null: another harness, or not counted yet
 };
 
 export type BlockView = {
@@ -107,7 +111,7 @@ export type TurnItem =
   | { kind: 'text'; text: string; t: number }
   | { kind: 'tool'; id: string; name: string; summary: string; t: number; error?: boolean; result?: string };
 
-export type Signal = { kind: string; severity: 'info' | 'warn'; text: string; sessionId?: string };
+export type Signal = { kind: string; severity: 'info' | 'warn'; text: string; sessionId?: string; sessionIds?: string[] };
 
 export type GitInfo = {
   branch: string | null;
@@ -150,6 +154,7 @@ export type ProjectSummary = {
   attention: Signal[];
   threadCount: number;
   hasBrief: boolean;
+  tokens?: TokenCounts | null; // all sessions with recorded usage
 };
 
 export type Brief = {
@@ -270,7 +275,7 @@ export type Overview = {
 export type Settings = {
   /** Your name for the greeting and AI prompts; '' = detected (Bootstrap.user.detectedName). */
   profile?: { name: string };
-  ai: { enabled: boolean; autoDigest: boolean; digestModel: string; briefModel: string; cvModel: string; maxFiveHourPct: number; maxSevenDayPct: number; concurrency: number; dailyBrief: boolean };
+  ai: { enabled: boolean; autoDigest: boolean; digestModel: string; briefModel: string; cvModel: string; maxFiveHourPct: number; maxSevenDayPct: number; concurrency: number; dailyBrief: boolean; backfillDays?: number };
   launch: { permissionMode: string; model: string; pcMode: 'terminal' | 'background'; phoneMode: 'terminal' | 'background'; trustFolders?: boolean };
   scan: { extraRoots: string[]; hiddenPaths: string[]; depth: number };
   ui: { theme: 'system' | 'light' | 'dark' };
@@ -289,6 +294,8 @@ export type Bootstrap = {
    */
   platform?: { wsl: boolean; os: string; terminal?: string | null };
   home: string;
+  /** Pilotage's data folder, with ~ for the home folder (Settings → About). */
+  dataDir?: string;
   usage: Usage;
   index: IndexProgress;
   ai: AIStatus;

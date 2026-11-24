@@ -23,6 +23,35 @@ export function SkipPromptsNote() {
   );
 }
 
+/** A session seeded by AI-written text asks before acting (the server enforces it): say so, and say why. */
+export function AiPromptNote() {
+  return (
+    <div className="row small" role="note" style={{ alignItems: 'flex-start', gap: 6 }}>
+      <ShieldCheck size={14} className="faint" style={{ flex: 'none', marginTop: 2 }} />
+      <span className="faint">Written by AI from your sessions, which can repeat text from a web page or a README: this session asks before acting, whatever Settings says. Read it first.</span>
+    </div>
+  );
+}
+
+/**
+ * Claude Code asks "trust this folder?" once per folder, at the PC, and a launch from the phone waits for that answer.
+ * Never pre-ticked: trusting a folder of code you didn't write must be a choice.
+ */
+export function TrustFolderCheck({ checked, onChange, hint }: { checked: boolean; onChange: (v: boolean) => void; hint?: string }) {
+  return (
+    <label className="row small check-row" style={{ alignItems: 'flex-start' }}>
+      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} style={{ marginTop: 3 }} />
+      <ShieldCheck size={14} className="faint" style={{ flex: 'none', marginTop: 2 }} />
+      <span>
+        Trust this folder in Claude Code
+        <span className="hint" style={{ display: 'block' }}>
+          {hint || "Claude asks this once per folder, on the PC, and waits until someone answers. Untick it for code you didn't write."}
+        </span>
+      </span>
+    </label>
+  );
+}
+
 const MODELS = [
   { value: '', label: 'Default' },
   { value: 'opus', label: 'Opus' },
@@ -85,7 +114,10 @@ export function NewSessionModal() {
   }, [projects, filter]);
   const agents = (harnesses?.harnesses || []).filter((h) => h.installed && h.enabled && (!!term || h.id === 'claude'));
   // One line that says what Options holds right now ("Terminal · Default model · Skip all prompts").
-  const perm = boot?.settings.launch.permissionMode;
+  // Filled with AI-written text: the server starts it in "Ask every time" (or keeps "Plan first"), whatever Settings says.
+  const aiPrompt = !!pre?.aiPrompt;
+  const settingsPerm = boot?.settings.launch.permissionMode;
+  const perm = aiPrompt && settingsPerm ? (settingsPerm === 'plan' ? 'plan' : 'default') : settingsPerm;
   const optionsLine = [
     !claudeOnly ? AGENT_LABEL[effHarness] : '',
     claudeOnly ? (mode === 'background' ? 'Background' : 'Terminal') : 'Terminal',
@@ -101,7 +133,7 @@ export function NewSessionModal() {
     try {
       const rec = await api<Launch>('/api/launch', {
         method: 'POST',
-        body: { projectId: projectId || undefined, worktree: pre?.worktree, resumeId: pre?.resumeId, fork: claudeOnly && fork, trust: askTrust && trustTick, name: name || undefined, prompt, mode: claudeOnly ? mode : 'terminal', model: claudeOnly ? model : '', harness: effHarness, ideaId: pre?.ideaId },
+        body: { projectId: projectId || undefined, worktree: pre?.worktree, resumeId: pre?.resumeId, fork: claudeOnly && fork, trust: askTrust && trustTick, name: name || undefined, prompt, mode: claudeOnly ? mode : 'terminal', model: claudeOnly ? model : '', harness: effHarness, ideaId: pre?.ideaId, aiPrompt: aiPrompt || undefined },
       });
       setLaunch(rec);
       inv('live', 'overview', 'ideas');
@@ -200,19 +232,9 @@ export function NewSessionModal() {
             aria-label={resuming ? 'Message to continue with' : 'First prompt'}
             autoFocus={!phone && (resuming || !!pre?.projectId)}
           />
-          {askTrust && (
-            <label className="row small check-row" style={{ alignItems: 'flex-start' }}>
-              <input type="checkbox" checked={trustTick} onChange={(e) => setTrustTick(e.target.checked)} style={{ marginTop: 3 }} />
-              <ShieldCheck size={14} className="faint" style={{ flex: 'none', marginTop: 2 }} />
-              <span>
-                Trust this folder in Claude Code
-                <span className="hint" style={{ display: 'block' }}>
-                  Claude asks this once per folder, on the PC, and waits until someone answers. Untick it for code you didn't write.
-                </span>
-              </span>
-            </label>
-          )}
+          {askTrust && <TrustFolderCheck checked={trustTick} onChange={setTrustTick} />}
           {perm === 'bypassPermissions' && <SkipPromptsNote />}
+          {aiPrompt && claudeOnly && <AiPromptNote />}
           <Disclosure
             className="ns-options"
             summary={

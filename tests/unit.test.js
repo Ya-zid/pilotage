@@ -85,6 +85,16 @@ test('path + url helpers', () => {
   assert.equal(toolSummary('Bash', { command: 'ls', description: 'List files' }), 'List files');
 });
 
+test('Windows-side sessions opened on a WSL folder (\\\\wsl.localhost\\<distro>, \\\\wsl$\\<distro>) map to the Linux path', async () => {
+  const { WSL_DISTRO } = await import('../server/config.js');
+  assert.equal(winToWsl(`\\\\wsl.localhost\\${WSL_DISTRO}\\home\\alex\\proj`), '/home/alex/proj');
+  assert.equal(winToWsl(`\\\\wsl$\\${WSL_DISTRO}\\home\\alex\\proj\\`), '/home/alex/proj');
+  assert.equal(winToWsl(`//wsl.localhost/${WSL_DISTRO.toLowerCase()}/home/alex/proj`), '/home/alex/proj', 'forward slashes, distro case-insensitive');
+  assert.equal(winToWsl(`\\\\wsl.localhost\\${WSL_DISTRO}`), '/');
+  assert.equal(winToWsl('\\\\wsl.localhost\\Other-Distro\\home\\a'), '\\\\wsl.localhost\\Other-Distro\\home\\a', 'another distro is not this file system');
+  assert.equal(winToWsl('\\\\server\\share\\x'), '\\\\server\\share\\x', 'other UNC paths are left alone');
+});
+
 test('launch names and shell quoting are safe', () => {
   assert.equal(sanitizeName('--evil; rm -rf /'), 'evil rm -rf');
   assert.equal(sanitizeName(''), 'Session');
@@ -128,6 +138,34 @@ test('transcript parser classifies prompts, replies, tools and skips noise', asy
   assert.ok(meta.offset < fs.statSync(f).size, 'partial last line is not consumed');
   const blocks = computeBlocks(meta, turns);
   assert.equal(blocks.length, 2, '8h gap splits into two work blocks');
+});
+
+test('transcript parser counts token usage once per message (split lines, streaming growth), per day, main conversation only', async () => {
+  const { isoDay } = await import('../server/util.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pl-usage-'));
+  const f = path.join(dir, '11111111-2222-3333-4444-666666666666.jsonl');
+  const base = { isSidechain: false, cwd: '/home/alex/demo', sessionId: 'x', entrypoint: 'cli' };
+  const u = (i, o, cw, cr) => ({ input_tokens: i, output_tokens: o, cache_creation_input_tokens: cw, cache_read_input_tokens: cr });
+  const a = (id, content, usage, ts, extra = {}) => line({ ...base, ...extra, type: 'assistant', message: { id, model: 'claude-opus-5-5', role: 'assistant', content, usage }, timestamp: ts });
+  let s = line({ ...base, type: 'user', turnOrigin: 'human', message: { role: 'user', content: 'Count it' }, timestamp: '2026-11-01T10:00:00.000Z' });
+  // One message written as three lines (thinking, text, tool call), the same usage on each: counted once.
+  s += a('msg_1', [{ type: 'thinking', thinking: 'hm' }], u(10, 100, 1000, 5000), '2026-11-01T10:00:01.000Z');
+  s += a('msg_1', [{ type: 'text', text: 'Looking.' }], u(10, 100, 1000, 5000), '2026-11-01T10:00:02.000Z');
+  s += a('msg_1', [{ type: 'tool_use', id: 't1', name: 'Read', input: {} }], u(10, 100, 1000, 5000), '2026-11-01T10:00:03.000Z');
+  // A message whose output grew between its lines: the final count.
+  s += a('msg_2', [{ type: 'text', text: 'Part' }], u(5, 7, 0, 6000), '2026-11-01T10:00:04.000Z');
+  s += a('msg_2', [{ type: 'text', text: 'Done.' }], u(5, 40, 0, 6000), '2026-11-01T10:00:05.000Z');
+  // A subagent's line (sidechain) is not the session's own conversation.
+  s += a('msg_3', [{ type: 'text', text: 'sub' }], u(1, 999, 0, 0), '2026-11-01T10:00:06.000Z', { isSidechain: true });
+  // The next day; no message id (older Claude Code): every line counts.
+  s += line({ ...base, type: 'user', turnOrigin: 'human', message: { role: 'user', content: 'Again' }, timestamp: '2026-11-02T09:00:00.000Z' });
+  s += a(undefined, [{ type: 'text', text: 'Again done.' }], u(2, 3, 0, 0), '2026-11-02T09:00:01.000Z');
+  fs.writeFileSync(f, s);
+  const { meta } = await parseTranscriptFile(f);
+  assert.deepEqual(meta.usage, { in: 17, out: 143, cw: 1000, cr: 11000 });
+  assert.equal(meta.outTokens, 143, 'output tokens no longer counted once per line');
+  assert.deepEqual(meta.usageDays, { [isoDay(Date.parse('2026-11-01T10:00:00.000Z'))]: [15, 140, 1000, 11000], [isoDay(Date.parse('2026-11-02T09:00:00.000Z'))]: [2, 3, 0, 0] });
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test('runWithInput: the timeout is a real deadline (SIGTERM ignored, grandchild holding stdout)', async () => {
@@ -190,6 +228,51 @@ test('session index: appends to a known session are written later, together with
   const ix2 = new SessionIndex();
   assert.equal(ix2.get(id).turnCount, 3);
   assert.equal(ix2.loadTurns(id).length, 3);
+});
+
+test('session index: a read error in the middle of an append, then a retry, counts each prompt and tool once', async () => {
+  const { SessionIndex } = await import('../server/sources/sessions.js');
+  const fsp = (await import('node:fs/promises')).default;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pl-ix-eio-'));
+  const id = '33333333-4444-4555-8666-777777777777';
+  const f = path.join(dir, `${id}.jsonl`);
+  const base = { isSidechain: false, cwd: '/home/alex/demo', sessionId: id, entrypoint: 'cli' };
+  const tool = (ts) => line({ ...base, type: 'assistant', message: { role: 'assistant', model: 'm1', content: [{ type: 'tool_use', id: `t${ts}`, name: 'Bash', input: { command: 'ls' } }] }, timestamp: ts });
+  fs.writeFileSync(f, line({ ...base, type: 'user', turnOrigin: 'human', message: { role: 'user', content: 'First task' }, timestamp: '2026-11-01T10:00:00.000Z' }) + tool('2026-11-01T10:00:05.000Z'));
+  const src = { id: 'test', mapCwd: (p) => p };
+  const entry = () => {
+    const st = fs.statSync(f);
+    return { id, file: f, src, projectKey: 'k', size: st.size, mtimeMs: st.mtimeMs };
+  };
+  const ix = new SessionIndex();
+  ix.adapters = [];
+  await ix.indexFile(entry());
+  // The append spans two 8 MB reads: a tool call on the open turn and a new prompt in the first, a big tool result
+  // that ends in the second.
+  fs.appendFileSync(f, tool('2026-11-01T10:01:00.000Z') + line({ ...base, type: 'user', turnOrigin: 'human', message: { role: 'user', content: 'Second task' }, timestamp: '2026-11-01T10:02:00.000Z' }) +
+    line({ ...base, type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'x', content: 'y'.repeat(9 * 1024 * 1024) }] }, timestamp: '2026-11-01T10:03:00.000Z' }) +
+    line({ ...base, type: 'assistant', message: { role: 'assistant', model: 'm1', content: [{ type: 'text', text: 'Done' }] }, timestamp: '2026-11-01T10:04:00.000Z' }));
+  const open = fsp.open;
+  fsp.open = async (...a) => {
+    const fh = await open(...a);
+    const read = fh.read.bind(fh);
+    let n = 0;
+    fh.read = (...x) => (++n === 2 ? Promise.reject(Object.assign(new Error('EIO: i/o error, read'), { code: 'EIO' })) : read(...x));
+    return fh;
+  };
+  try {
+    await assert.rejects(ix.indexFile(entry()), /EIO/);
+  } finally {
+    fsp.open = open;
+  }
+  await ix.indexFile(entry()); // next scan
+  const fresh = await parseTranscriptFile(f);
+  const m = ix.get(id);
+  assert.deepEqual(m.counts, fresh.meta.counts, 'prompt and tool counts as a fresh parse gives');
+  assert.deepEqual(m.tools, fresh.meta.tools);
+  assert.deepEqual(m.models, fresh.meta.models);
+  assert.deepEqual(ix.loadTurns(id).map((t) => [t.p, t.n, t.a]), fresh.turns.map((t) => [t.p, t.n, t.a]), 'tool calls per turn counted once');
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test('registry: sessions that only grew refresh their project totals without a rebuild', async () => {
@@ -498,8 +581,9 @@ test('phone firewall scope keeps a Wi-Fi adapter whose name arrives garbled (Win
   const addrs = parseIpconfig(ru);
   assert.ok(addrs.some((a) => a.ip === '192.168.1.23'), 'address found');
   const ranges = firewallRanges(addrs, ['100.64.0.0/10']);
-  assert.ok(ranges.has('192.168.1.0/24'), `the Wi-Fi subnet is in the firewall rule (${[...ranges]})`);
-  assert.ok(!firewallRanges([{ kind: 'other', ip: '169.254.10.1', mask: '255.255.0.0' }]).has('169.254.0.0/16'), 'link-local is not a network to open');
+  // Whatever the adapter's name says, the rule follows the network the PC is on (Windows' LocalSubnet keyword).
+  assert.ok(ranges.has('LocalSubnet') && ranges.has('100.64.0.0/10'), `firewall scope: ${[...ranges]}`);
+  assert.ok(![...ranges].some((r) => /^192\.168\./.test(r)), 'no frozen subnet from the network where Enable was clicked');
 });
 
 test('new installs ask before commands and edits; installs from before keep "Skip all prompts"', () => {
@@ -866,4 +950,75 @@ test("Pilotage's claude -p calls run in a private folder with no CLAUDE.md or Cl
   assert.ok(isInternalPath(path.join(process.env.PILOTAGE_DATA, 'ai-sandbox')), 'sessions already indexed under data/ai-sandbox stay hidden');
   assert.ok(!isInternalPath(home) && !isInternalPath(path.join(os.tmpdir(), 'pilotage-airline')) && !isInternalPath(''));
   fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('collisions: running sessions in the same checkout that edited the same files are flagged; worktrees are not', async () => {
+  const { Views } = await import('../server/views.js');
+  const metas = {
+    A: { id: 'A', cwd: '/w/shop', files: { '/w/shop/src/cart.ts': 3, '/w/shop/README.md': 1 } },
+    B: { id: 'B', cwd: '/w/shop', files: { '/w/shop/src/cart.ts': 1 } },
+    C: { id: 'C', cwd: '/w/shop-feat', files: { '/w/shop-feat/src/cart.ts': 2 } },
+    D: { id: 'D', cwd: '/w/shop', files: { '/w/shop/src/cart.ts': 1 } },
+  };
+  const live = new Set(['A', 'B', 'C']);
+  const v = new Views({
+    index: { get: (id) => metas[id], loadTurns: () => [], list: () => Object.values(metas) },
+    registry: { resolve: (cwd) => (cwd === '/w/shop-feat' ? { root: '/w/shop', worktree: '/w/shop-feat' } : { root: '/w/shop', worktree: null }) },
+    store: {},
+    live: { get: (id) => ({ live: live.has(id) }) },
+    ai: { blocksOf: () => [], state: { blocks: {} } },
+  });
+  const out = v.collisionsOf({ sessionIds: ['A', 'B', 'C', 'D'] });
+  assert.equal(out.length, 1);
+  assert.equal(out[0].kind, 'collision');
+  assert.deepEqual(out[0].sessionIds.sort(), ['A', 'B'], 'C works in its own worktree; D is not running');
+  assert.match(out[0].text, /src\/cart\.ts/);
+});
+
+test('"Continue fresh": the recap gives the summaries, the next step, the files and the last requests, secrets masked', async () => {
+  const { Views } = await import('../server/views.js');
+  const meta = { id: 'S', cwd: '/w/shop', customTitle: 'Checkout rewrite', lastAt: Date.UTC(2026, 10, 20), gitBranch: 'feat/checkout', compactions: 2, files: { '/w/shop/src/cart.ts': 5, '/w/shop/src/pay.ts': 2 } };
+  const v = new Views({
+    index: { get: () => meta, loadTurns: () => [{ o: 'h', p: 'Wire the payment step, key DB_PASSWORD=hunter2secret' }, { o: 'h', p: 'Now the coupon field' }], list: () => [meta] },
+    registry: {},
+    store: {},
+    live: { get: () => null },
+    ai: { blocksOf: () => [{ key: 'S:0' }], state: { blocks: { 'S:0': { digest: { title: 'Cart and payment', outcome: 'Payment step works; coupons pending', nextStep: 'Add the coupon field and its validation' } } } } },
+  });
+  const p = v.recapPrompt('S');
+  assert.match(p, /Checkout rewrite/);
+  assert.match(p, /compacted 2 times/);
+  assert.match(p, /Payment step works/);
+  assert.match(p, /Next step it noted: Add the coupon field/);
+  assert.match(p, /src\/cart\.ts, src\/pay\.ts/);
+  assert.match(p, /Now the coupon field/);
+  assert.doesNotMatch(p, /hunter2secret/);
+});
+
+test('instance lock: a stale lock whose pid now belongs to another program running "server/index.js" is taken over (review R8)', async () => {
+  const { spawn } = await import('node:child_process');
+  const { acquireInstanceLock, processStartId } = await import('../server/instance-lock.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pilotage-lock-'));
+  // Some other app's node server, matching the command line Pilotage looks for.
+  const other = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)', 'other-app/server/index.js'], { stdio: 'ignore' });
+  try {
+    await new Promise((r) => setTimeout(r, 500));
+    const id = processStartId(other.pid);
+    assert.ok(id, 'the start identity of a process can be read');
+    assert.equal(processStartId(other.pid), id, 'and it stays the same');
+    assert.notEqual(processStartId(process.pid), id);
+    // A lock left by a Pilotage that crashed; its pid was reused by that app since (another start identity).
+    const stale = path.join(dir, 'stale.lock');
+    fs.writeFileSync(stale, JSON.stringify({ pid: other.pid, port: 4747, startedAt: Date.now() - 60_000, start: 'linux:old-boot:12345' }));
+    assert.equal(acquireInstanceLock(stale, { port: 4791 }).ok, true, 'a pid reused since the lock was written is not the holder');
+    assert.equal(JSON.parse(fs.readFileSync(stale, 'utf8')).start, processStartId(process.pid), 'the new lock records who holds it');
+    // The process that wrote the lock is still respected, whatever the clock says.
+    const held = path.join(dir, 'held.lock');
+    fs.writeFileSync(held, JSON.stringify({ pid: other.pid, port: 4747, startedAt: Date.now() - 3600_000, start: id }));
+    const r = acquireInstanceLock(held, { port: 4792 });
+    assert.equal(r.ok, false);
+    assert.equal(r.pid, other.pid);
+  } finally {
+    other.kill('SIGKILL');
+  }
 });

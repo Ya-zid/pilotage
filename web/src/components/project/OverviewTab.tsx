@@ -8,13 +8,14 @@ import { api, terminalPlace, useInvalidate, useTerminal, useWsl } from '../../ap
 import { useScout, useSpinoffs, useWork } from '../../api-extra';
 import type { ProjectDetail } from '../../types';
 import type { WorkItem } from '../../types-extra';
-import { Button, Card, ClampText, Disclosure, EmptyState, IconButton, Meta, ProjectGlyph, Section, Snippet, Spinner, useToast } from '../ui';
-import { ago, copy, fmtDate, fmtDateTime, isoDay, plural } from '../../util';
+import { Button, Card, ClampText, Disclosure, EmptyState, IconButton, Meta, ProjectGlyph, Section, Snippet, Spinner, compactNum, useToast } from '../ui';
+import { ago, copy, fmtDate, fmtDateTime, isoDay, plural, tokenBreakdown } from '../../util';
 import { TaskRow, TaskSheet } from '../tasks/TaskBits';
 import { ScoutCards } from '../ideas/ScoutCards';
 import { SessionListRow } from '../session/SessionListRow';
 import { Workstreams } from './Workstreams';
 import { errMsg } from './lib';
+import { DevPort } from './WorktreesTab';
 
 type Go = (tab: 'tasks' | 'sessions' | 'notes') => void;
 
@@ -145,19 +146,22 @@ function RecentSessions({ p, go }: { p: ProjectDetail; go: Go }) {
 // ---------------------------------------------------------------- possible projects
 function PossibleProjects({ p }: { p: ProjectDetail }) {
   const { data } = useScout(p.id);
+  // While "Make it a project" is open the list stays: creating the project accepts the last candidate (n = 0), and
+  // unmounting here would close the dialog on its success screen.
+  const [making, setMaking] = useState(false);
   const n = (data?.candidates || []).filter((c) => c.status === 'new' && c.projectId === p.id).length;
-  if (!n) return null;
+  if (!n && !making) return null;
   return (
     <Disclosure
       className="pj-fold"
       summary={
         <span className="pj-fold-sum">
           <Sparkles size={15} className="pj-fold-ico" aria-hidden="true" />
-          Claude spotted {plural(n, 'possible project')}
+          Claude spotted {plural(Math.max(n, 1), 'possible project')}
         </span>
       }
     >
-      <ScoutCards projectId={p.id} compact />
+      <ScoutCards projectId={p.id} compact onDialog={setMaking} />
     </Disclosure>
   );
 }
@@ -245,6 +249,14 @@ function DetailsCard({ p, go }: { p: ProjectDetail; go: Go }) {
           )}
           <dt>Last activity</dt>
           <dd title={fmtDateTime(p.lastAt)}>{p.lastAt ? ago(p.lastAt) : '—'}</dd>
+          {p.tokens?.total ? (
+            <>
+              <dt>Tokens</dt>
+              <dd title={tokenBreakdown(p.tokens)}>
+                <span className="num">{compactNum(p.tokens.total)}</span> <span className="tiny faint">all sessions</span>
+              </dd>
+            </>
+          ) : null}
           {p.isGit && (
             <>
               <dt>Branch</dt>
@@ -345,9 +357,7 @@ function ServersCard({ p }: { p: ProjectDetail }) {
           <div className="lrow-body">
             <div className="cluster">
               {x.ports.map((port) => (
-                <a key={port} className="link mono small" href={`http://localhost:${port}`} target="_blank" rel="noreferrer">
-                  localhost:{port}
-                </a>
+                <DevPort key={port} port={port} label={`localhost:${port}`} />
               ))}
               {!x.ports.length && <span className="small">pid {x.pid}</span>}
             </div>

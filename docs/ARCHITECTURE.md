@@ -49,8 +49,8 @@ against `PILOTAGE_LAN_ALLOW` first (`lanConnectionAllowed()` in `server/net.js`)
 
 ## Feature modules
 
-Core routes live in `server/index.js`. Larger features are modules in `server/routes/` (`plan.js`, `providers.js`,
-`scout.js`, `work.js`). At startup every `server/routes/*.js` is imported in alphabetical order and its default
+Core routes live in `server/index.js`. Larger features are modules in `server/routes/` (`chats.js`, `graph.js`,
+`plan.js`, `providers.js`, `reports.js`, `scout.js`, `work.js`). At startup every `server/routes/*.js` is imported in alphabetical order and its default
 export is called:
 
 ```js
@@ -75,10 +75,15 @@ Query keys (`KIND_TO_KEYS`) and invalidates them, so pages refetch by themselves
 
 - **Sources** (`server/sources/`, read-only). `sessions.js` indexes Claude Code transcripts (and, on WSL, the
   Windows-side ones, plus `history.jsonl`) incrementally: it keeps each file's byte offset and parses only new
-  bytes. `harness/codex.js` and `harness/gemini.js` are adapters with the same output shape. Secrets are redacted
+  bytes. `harness/codex.js` and `harness/gemini.js` are adapters with the same output shape (Codex rollouts are
+  append-only and read from their offset too; a Gemini chat is one JSON file, re-read when it changes). `claude-ai.js`
+  reads a claude.ai data export when you import one (Settings → Sources) into `data/claude-ai.json`
+  ([API-CHATS.md](API-CHATS.md)). Secrets are redacted
   (`redact()` in `server/util.js`) before anything is stored.
-- **Index** (`data/index/`): session meta and turns (prompt, final reply, tool count, byte offset). Turn detail is
-  read from the transcript at the stored offset when a page asks for it.
+- **Index** (`data/index/`): session meta and turns (prompt, final reply, tool count, byte offset, line uuid). Turn
+  detail is read from the transcript at the stored offset when a page asks for it. A fork starts with copies of its
+  parent's lines (same uuids); those first turns are marked `inherited` and left out of its blocks, activity and
+  prompt counts, so the parent's work is counted once.
 - **Registry** (`sources/projects.js`): walks your home folder (3 levels by default) and extra folders from
   Settings for git repos, `CLAUDE.md` folders and code folders, and builds workspace → project → worktrees and
   sessions. Git runs through `sources/git.js` with `--no-optional-locks`, hooks, fsmonitor and signature checks off,
@@ -89,7 +94,8 @@ Query keys (`KIND_TO_KEYS`) and invalidates them, so pages refetch by themselves
 - **State**: `server/store.js` keeps settings, renames, ideas and decisions in `data/state.json` (atomic writes,
   daily backups). Tasks and spin-offs are in `data/work.json` (`server/work/store.js`).
 - **Read model** (`server/views.js`): turns all of the above into what the pages show (overview, project detail,
-  session lists, history, search).
+  session lists, history, search). `server/graph.js` builds the Map from the same data (no AI call, no transcript
+  read): [API-GRAPH.md](API-GRAPH.md).
 
 Background loops in `start()`: session scan every 8 s, live state every 5 s while a page is open, dev servers every
 30 s, git every 60 s, an AI tick every 45 s, the phone certificate check every minute.
@@ -132,5 +138,7 @@ misses. Details: [PHONE.md](PHONE.md).
 ## CLI
 
 `bin/pilotage` (bash) starts and stops the server (pid in `data/pilotage.pid`, log in `data/logs/server.log`),
-builds the web app and installs the Windows shortcuts. Commands that talk to the running server go through
+builds the web app and installs the Windows shortcuts. One server runs per data folder: it takes
+`data/server.lock` (pid and port) before reading anything, and a second one, even on another port, exits with
+"already running on port N". Commands that talk to the running server go through
 `server/cli.js`, which sends the desktop key from `data/secrets.json`.

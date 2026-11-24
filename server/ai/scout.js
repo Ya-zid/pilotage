@@ -20,6 +20,7 @@ import { clip, oneLine, hash, isInside, redact, randomToken, plain } from '../ut
 import { callAI as providerCallAI } from './providers.js';
 import { fitNewestFirst, classifyFailure } from './engine.js';
 import { isAutomation } from '../sources/projects.js';
+import { ownPrompts } from '../sources/sessions.js';
 import { SENSITIVE, tilde } from '../work/spinoff.js';
 import { normText, tokenSet, similar } from '../work/extract.js';
 import { userName } from '../profile.js';
@@ -905,7 +906,7 @@ export function buildEvidence({ project, sessions, ai, index, registry, store, n
   const L = [];
   const first = Math.min(...sessions.map((s) => s.startedAt || s.lastAt || Infinity));
   const last = Math.max(0, ...sessions.map((s) => s.lastHumanAt || s.lastAt || 0));
-  const typed = sessions.reduce((n, s) => n + (s.counts?.h || 0), 0);
+  const typed = sessions.reduce((n, s) => n + ownPrompts(s), 0);
   const me = userName();
   L.push(`Project folder: ${tilde(project.path)} ("${name}", workspace ${store.project(project.path).workspace || project.workspace || '?'})`);
   if (sessions.length) L.push(`${me}'s interactive sessions here: ${sessions.length} (${fmtDay(Number.isFinite(first) ? first : 0)} → ${fmtDay(last)}), ${typed} prompts typed by ${me}.`);

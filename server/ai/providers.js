@@ -19,7 +19,7 @@ export const PROVIDER_IDS = ['claude-cli', 'codex-cli', 'openai-compatible'];
 
 export const PROVIDERS = {
   'claude-cli': { label: 'Claude Code (claude -p)', kind: 'cli', bin: 'claude', usageGuard: true, description: 'Your Claude subscription through headless claude -p. No tools, no MCP, no session files.' },
-  'codex-cli': { label: 'Codex CLI (codex exec)', kind: 'cli', bin: 'codex', usageGuard: false, description: 'Your ChatGPT/Codex login through codex exec, read-only sandbox, no MCP, no web search.' },
+  'codex-cli': { label: 'Codex CLI (codex exec)', kind: 'cli', bin: 'codex', usageGuard: false, description: 'Your ChatGPT/Codex login through codex exec, read-only sandbox (it can still read files on this PC), no MCP, no web search.' },
   'openai-compatible': { label: 'OpenAI-compatible API', kind: 'api', bin: null, usageGuard: false, description: 'Any /chat/completions API: DeepSeek, OpenRouter, OpenAI, Groq, local Ollama, or a custom URL. Paid per call.' },
 };
 

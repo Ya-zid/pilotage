@@ -4,7 +4,7 @@ import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ChevronRight, GitPullRequest } from 'lucide-react';
 import { Card, CopyButton, Disclosure, Meta, PathLabel, compactNum } from '../ui';
-import { bytes, fmtDateTime, plural, shortModel } from '../../util';
+import { bytes, fmtDateTime, plural, shortModel, tokenBreakdown } from '../../util';
 import type { SessionDetail } from '../../types';
 import { HARNESS_LABEL, harnessOf } from './shared';
 
@@ -60,7 +60,14 @@ function Facts({ s }: { s: SessionDetail }) {
       {row('Last activity', <span className="num">{fmtDateTime(s.lastAt)}</span>)}
       {row('Your prompts', s.humanPrompts ? <span className="num">{s.humanPrompts.toLocaleString()}</span> : null)}
       {row('Tool calls', toolCalls ? <span className="num">{toolCalls.toLocaleString()}</span> : null)}
-      {row('Output tokens', s.outTokens > 0 ? <span className="num" title={s.outTokens.toLocaleString()}>{compactNum(s.outTokens)}</span> : null)}
+      {s.tokens?.total
+        ? row(
+            'Tokens',
+            <span title={tokenBreakdown(s.tokens)}>
+              <span className="num">{compactNum(s.tokens.total)}</span> <span className="tiny faint num">{compactNum(s.tokens.output)} out</span>
+            </span>,
+          )
+        : row('Output tokens', s.outTokens > 0 ? <span className="num" title={s.outTokens.toLocaleString()}>{compactNum(s.outTokens)}</span> : null)}
       {row(models.length > 1 ? 'Models' : 'Model', models.length ? models.map(([m]) => shortModel(m)).join(', ') : null)}
       {row(harness === 'claude' ? 'Claude Code' : HARNESS_LABEL[harness], s.version || null)}
     </dl>

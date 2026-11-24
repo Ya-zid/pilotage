@@ -130,3 +130,48 @@ test('a program shipped inside the repo is never found through a relative PATH e
   const { gitEnvPath } = await import('../server/sources/git.js');
   assert.equal(gitEnvPath(`/usr/bin:.:node_modules/.bin::/bin:`), '/usr/bin:/bin', 'only absolute PATH entries');
 });
+
+test('git older than 2.26 (no --show-scope): status still runs, a repo\'s own filters are still refused', () => {
+  const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+  // Stand-ins for old gits: they refuse the options they don't have (git 2.8-2.25: --show-scope; older: --show-origin).
+  const fake = (name, opts) => {
+    const bin = path.join(BASE, name);
+    fs.mkdirSync(bin);
+    const cases = opts.map((o) => `--${o}) echo "error: unknown option \\\`${o}'" >&2; exit 129;;`).join(' ');
+    fs.writeFileSync(path.join(bin, 'git'), `#!/bin/sh\nfor a in "$@"; do case "$a" in ${cases} esac; done\nexec '${realGit}' "$@"\n`, { mode: 0o755 });
+    return bin;
+  };
+  const git225 = fake('git225', ['show-scope']);
+  const git27 = fake('git27', ['show-scope', 'show-origin']);
+  const touched = (dir) => fs.utimesSync(path.join(dir, 'a.txt'), new Date(Date.now() + 5000), new Date(Date.now() + 5000));
+  const plain = repo('old-plain');
+  const evil = repo('old-evil');
+  fs.writeFileSync(path.join(evil, '.gitattributes'), '* filter=evil\n');
+  git(evil, 'config', 'filter.evil.clean', script('old-evil'));
+  touched(evil);
+  // A repo's config can include a file the repo ships: still the repo's own.
+  const incl = repo('old-include');
+  fs.writeFileSync(path.join(incl, '.gitattributes'), '* filter=inc\n');
+  fs.writeFileSync(path.join(incl, 'shared.gitconfig'), `[filter "inc"]\n\tclean = ${script('old-include')}\n`);
+  git(incl, 'config', 'include.path', '../shared.gitconfig');
+  touched(incl);
+  // The user's own filters (global config) are fine.
+  const home = path.join(BASE, 'old-home');
+  fs.mkdirSync(home);
+  fs.writeFileSync(path.join(home, '.gitconfig'), `[filter "mine"]\n\tclean = ${script('old-global')}\n`);
+  const statuses = (bin, dirs) => {
+    const code = `const { statusOf } = await import(${JSON.stringify(new URL('../server/sources/git.js', import.meta.url).href)});
+      const out = []; for (const d of ${JSON.stringify(dirs)}) { const s = await statusOf(d); out.push([s.ok, s.error || null]); } console.log(JSON.stringify(out));`;
+    const out = execFileSync(process.execPath, ['--input-type=module', '-e', code], { env: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}` }, encoding: 'utf8' });
+    return JSON.parse(out.trim().split('\n').pop());
+  };
+  const [p, e, i] = statuses(git225, [plain, evil, incl]);
+  assert.deepEqual(p, [true, null], 'a repo without filters of its own gets its status');
+  assert.equal(e[0], false);
+  assert.match(e[1], /defines its own git filters/);
+  assert.equal(i[0], false, 'a filter in a file the repo includes is the repo\'s own');
+  for (const m of ['old-evil', 'old-include']) assert.equal(fs.existsSync(marker(m)), false, `${m} filter ran`);
+  const [old] = statuses(git27, [plain]);
+  assert.equal(old[0], false, 'git that cannot say where config comes from: no status');
+  assert.match(old[1], /too old.*2\.26/);
+});

@@ -133,3 +133,20 @@ export async function trustFolder(dir, { file = CLAUDE_CONFIG, home = HOME, back
     return { changed: true };
   });
 }
+
+/**
+ * Before a Claude launch: record trust for `cwd` when the user asked for it (the checkbox) or Settings says so
+ * (`auto`). Never throws and never blocks the launch. Returns 'skipped' | 'already' | 'trusted' | 'failed'.
+ */
+export async function trustBeforeLaunch(cwd, { asked = false, auto = false, why = '', log = null, show = (p) => p, ...opts } = {}) {
+  if (!asked && !auto) return 'skipped';
+  try {
+    if (trustState(cwd, opts).trusted) return 'already';
+    const r = await trustFolder(cwd, opts);
+    if (r.changed) log?.info(`trust: marked ${show(cwd)} as trusted in Claude Code (${why})`);
+    return r.changed ? 'trusted' : 'already';
+  } catch (e) {
+    log?.warn(`trust: could not mark ${show(cwd)} as trusted: ${e.message}`);
+    return 'failed';
+  }
+}

@@ -20,6 +20,7 @@ import type {
   DayActivity,
   BlockView,
 } from './types';
+import type { ChatSummary } from './types-map';
 import { registerWorkspaces } from './util';
 
 export class ApiError extends Error {
@@ -119,7 +120,7 @@ export const useTimeline = () =>
 export const useDay = (day: string | null) =>
   useQuery({ queryKey: ['day', day], queryFn: () => api<{ day: string; blocks: (BlockView & { kind: string; title: string; project: string | null })[] }>(`/api/timeline/day/${day}`), enabled: !!day });
 export const useSearch = (q: string) =>
-  useQuery({ queryKey: ['search', q], queryFn: () => api<{ projects: ProjectSummary[]; sessions: SessionSummary[]; ideas: Idea[] }>(`/api/search?q=${encodeURIComponent(q)}`), enabled: q.trim().length >= 2, staleTime: 10_000 });
+  useQuery({ queryKey: ['search', q], queryFn: () => api<{ projects: ProjectSummary[]; sessions: SessionSummary[]; ideas: Idea[]; chats?: ChatSummary[] }>(`/api/search?q=${encodeURIComponent(q)}`), enabled: q.trim().length >= 2, staleTime: 10_000 });
 
 // ---------- mutations ----------
 export function useInvalidate() {
@@ -141,20 +142,21 @@ export function usePatchProject(id: string) {
 // session/Live/Timeline rows show project names), so a change refreshes every list that displays it.
 // Only queries on screen refetch; the rest are just marked stale.
 const KIND_TO_KEYS: Record<string, string[]> = {
-  sessions: ['overview', 'projects', 'project', 'sessions', 'session', 'turns', 'turn', 'live', 'timeline', 'portfolio', 'work'],
+  sessions: ['overview', 'projects', 'project', 'sessions', 'session', 'turns', 'turn', 'live', 'timeline', 'portfolio', 'work', 'graph'],
   live: ['overview', 'live', 'sessions', 'session', 'projects', 'project'],
-  projects: ['overview', 'projects', 'project', 'portfolio', 'work', 'spinoffs', 'sessions', 'session', 'live', 'timeline', 'day'],
+  projects: ['overview', 'projects', 'project', 'portfolio', 'work', 'spinoffs', 'sessions', 'session', 'live', 'timeline', 'day', 'graph'],
   ai: ['ai', 'overview', 'scout'],
-  'ai-data': ['ai', 'overview', 'projects', 'project', 'sessions', 'session', 'portfolio', 'day'],
-  ideas: ['ideas', 'overview'],
+  'ai-data': ['ai', 'overview', 'projects', 'project', 'sessions', 'session', 'portfolio', 'day', 'graph'],
+  ideas: ['ideas', 'overview', 'graph'],
   devices: ['devices'],
   net: ['net'],
   index: ['overview', 'bootstrap'],
-  work: ['work', 'spinoffs', 'overview', 'project'],
+  work: ['work', 'spinoffs', 'overview', 'project', 'graph'],
   providers: ['providers', 'harnesses'],
   settings: ['settings', 'bootstrap', 'providers', 'harnesses', 'ai'],
   overview: ['overview'],
-  scout: ['scout', 'overview', 'ideas', 'project'],
+  scout: ['scout', 'overview', 'ideas', 'project', 'graph'],
+  chats: ['chats', 'graph', 'search'],
 };
 
 export function useServerEvents() {

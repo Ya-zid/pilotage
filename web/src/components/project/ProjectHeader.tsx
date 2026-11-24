@@ -1,7 +1,8 @@
 // Project detail header: crumbs, identity, status, one primary action (New session) and ⋯ (status, pin, edit, spin off…).
 // Open-in buttons (VS Code / Terminal / Folder) live in the Overview's Details card; running sessions in the strip below.
 import React from 'react';
-import { Copy, Eye, GitFork, MoreHorizontal, Pencil, Pin, PinOff, Plus } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Copy, Eye, GitFork, MoreHorizontal, Network, Pencil, Pin, PinOff, Plus } from 'lucide-react';
 import { usePatchProject } from '../../api';
 import { useApp } from '../AppContext';
 import type { ProjectDetail } from '../../types';
@@ -20,6 +21,7 @@ const STATUS_CHOICES: { value: string | null; label: string; hint?: string }[] =
 
 export function ProjectHeader({ p, onEdit, onSpinoff, children }: { p: ProjectDetail; onEdit: () => void; onSpinoff: () => void; children?: React.ReactNode }) {
   const { openNewSession } = useApp();
+  const navigate = useNavigate();
   const patch = usePatchProject(p.id);
   const toast = useToast();
   const set = (body: Record<string, unknown>, done: string) => patch.mutate(body, { onSuccess: () => toast(done), onError: (e) => toast(errMsg(e), true) });
@@ -35,6 +37,7 @@ export function ProjectHeader({ p, onEdit, onSpinoff, children }: { p: ProjectDe
     { kind: 'sep' },
     { label: p.pinned ? 'Unpin' : 'Pin to the top', icon: p.pinned ? <PinOff /> : <Pin />, onSelect: () => set({ pinned: !p.pinned }, p.pinned ? 'Unpinned' : 'Pinned to the top') },
     { label: 'Edit project…', icon: <Pencil />, onSelect: onEdit },
+    { label: 'See on the map', icon: <Network />, hint: 'Its workstreams, sessions, tasks and links', onSelect: () => navigate(`/map?project=${p.id}`) },
     { label: 'Spin off…', icon: <GitFork />, hint: 'Move some of this work into a new project', onSelect: onSpinoff },
     { label: 'Copy folder path', icon: <Copy />, hint: p.displayPath, onSelect: () => copy(p.path).then(() => toast('Path copied')) },
     ...(p.hidden ? [{ label: 'Show in lists again', icon: <Eye />, onSelect: () => set({ hidden: false }, 'Visible again') } as MenuEntry] : []),

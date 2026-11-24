@@ -2440,6 +2440,19 @@ a.stat:hover {
 .prose strong {
   font-weight: 600;
 }
+/* A Markdown image, shown as its alt text (see MarkdownImage in components/ui.tsx). */
+.prose .md-img {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+  border-radius: var(--r-sm);
+  box-shadow: inset 0 0 0 1px var(--border);
+  font-size: 0.86em;
+}
+.prose span.md-img {
+  color: var(--text-2);
+}
 .prose code {
   background: var(--surface-2);
   padding: 1px 5px;
@@ -2639,6 +2652,10 @@ a.stat:hover {
   min-width: 0;
   animation: pop var(--dur-2) var(--ease);
   overflow: hidden;
+}
+/* The sheet itself takes focus when it opens on a phone (no keyboard pop-up): no ring around the whole sheet. */
+.modal:focus {
+  outline: none;
 }
 .modal.wide {
   max-width: 780px;

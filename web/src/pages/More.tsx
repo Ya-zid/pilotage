@@ -1,6 +1,6 @@
-// More (phone): the pages that aren't tabs (Tasks, Ideas, History, Portfolio & CV, Settings, How Pilotage works),
+// More (phone): the pages that aren't tabs (Tasks, Ideas, Map, History, Portfolio & CV, Settings, How Pilotage works),
 // plus Claude usage. One line per page; only Tasks and Ideas carry a state line (their counts), nothing explains itself.
-import { Briefcase, ChevronRight, CircleHelp, Gauge, History, Lightbulb, ListChecks, Settings } from 'lucide-react';
+import { Briefcase, ChevronRight, CircleHelp, Gauge, History, Lightbulb, ListChecks, Network, Settings } from 'lucide-react';
 import { useBootstrap, useIdeas, useOverview } from '../api';
 import { useTodayTaskCount } from '../components/Layout';
 import { Card, CountPill, ListRow, Meter, PageHeader, USAGE_LABELS } from '../components/ui';
@@ -45,6 +45,7 @@ export default function More() {
       sub: [possible ? plural(possible, 'possible project') : null, savedIdeas ? plural(savedIdeas, 'saved idea') : null].filter(Boolean).join(' · ') || undefined,
       count: possible > 0 ? <CountPill n={possible} title={plural(possible, 'new possible project')} /> : null,
     },
+    { to: '/map', icon: <Network />, label: 'Map' },
     { to: '/history', icon: <History />, label: 'History' },
     { to: '/portfolio', icon: <Briefcase />, label: 'Portfolio & CV' },
     { to: '/settings', icon: <Settings />, label: 'Settings' },

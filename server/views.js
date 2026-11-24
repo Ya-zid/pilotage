@@ -2,8 +2,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { HOME } from './config.js';
-import { clip, oneLine, isoDay, isInside, plain, dejargonAll } from './util.js';
+import { clip, oneLine, isoDay, isInside, plain, dejargonAll, redact } from './util.js';
 import { isAutomation, automationKey, listDocs, detectStack } from './sources/projects.js';
+import { ownPrompts, ownUsage } from './sources/sessions.js';
 import { WORKSPACE_DISPLAY } from './workspaces.js';
 import { shortTitle } from './work/extract.js';
 
@@ -139,7 +140,7 @@ export class Views {
       branch: meta.gitBranch,
       startedAt: meta.startedAt,
       lastAt: meta.lastAt,
-      humanPrompts: meta.counts?.h || 0,
+      humanPrompts: ownPrompts(meta),
       turns: meta.turnCount || 0,
       lastPrompt: clip(plain(meta.lastPrompt || ''), 260),
       recap: meta.awaySummary ? clip(meta.awaySummary, 400) : null,
@@ -155,6 +156,7 @@ export class Views {
       hidden: !!userOver.hidden,
       harness: meta.harness || 'claude',
       account: meta.accountUuid ? String(meta.accountUuid).slice(0, 8) : null,
+      tokens: tokensOf(meta),
     };
   }
 
@@ -182,7 +184,7 @@ export class Views {
       files,
       tools,
       counts: meta.counts,
-      outTokens: meta.outTokens,
+      outTokens: ownUsage(meta)?.usage.out ?? meta.outTokens, // a fork's copied replies are its parent's
       models: meta.models,
       version: meta.version,
       entrypoint: meta.entrypoint,
@@ -221,8 +223,9 @@ export class Views {
     };
   }
 
-  listSessions({ projectId, q, kind, limit = 200, liveOnly, includeHidden } = {}) {
+  listSessions({ projectId, q, kind, limit = 200, liveOnly, includeHidden, idPrefix } = {}) {
     let metas = this.index.list();
+    if (idPrefix) metas = metas.filter((m) => m.id.startsWith(idPrefix));
     if (projectId) {
       const p = this.registry.byId(projectId);
       if (!p) return [];
@@ -258,6 +261,58 @@ export class Views {
     return threads;
   }
 
+  /**
+   * A first prompt for a fresh session that picks up where a long or compacted one left off: its AI summaries (no new
+   * AI call), the next step it noted, the files it touched most and the last requests. Secrets are masked.
+   */
+  recapPrompt(id) {
+    const meta = this.index.get(id);
+    if (!meta) return null;
+    const turns = this.index.loadTurns(id);
+    const blocks = this.ai.blocksOf(meta).slice(-4);
+    const digests = blocks.map((b) => this.ai.state.blocks[b.key]?.digest).filter(Boolean);
+    const title = meta.customTitle || meta.aiTitle || meta.summaryTitle || 'an earlier session';
+    const day = new Date(meta.lastAt || Date.now()).toISOString().slice(0, 10);
+    const files = Object.entries(meta.files || {})
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 8)
+      .map(([f]) => (meta.cwd && f.startsWith(`${meta.cwd}/`) ? f.slice(meta.cwd.length + 1) : f));
+    const asks = turns.filter((t) => t.o === 'h' && t.p).slice(-3).map((t) => `"${oneLine(t.p).slice(0, 220)}"`);
+    const lines = [`Continuing from an earlier session ("${title}", ${day}${meta.gitBranch ? `, branch ${meta.gitBranch}` : ''}). Its history is long${meta.compactions ? ` and was compacted ${meta.compactions} time${meta.compactions > 1 ? 's' : ''}` : ''}, so here is a recap instead:`];
+    if (digests.length) for (const d of digests) lines.push(`- ${d.title}: ${d.outcome || d.summary}`);
+    const next = [...digests].reverse().find((d) => d.nextStep)?.nextStep;
+    if (next) lines.push(`- Next step it noted: ${next}`);
+    if (files.length) lines.push(`- Files it worked on most: ${files.join(', ')}`);
+    if (asks.length) lines.push(`- Last requests: ${asks.join(' / ')}`);
+    lines.push('Look at the current state of those files (and git status) before changing anything, then continue from the next step. Ask me if something in this recap no longer matches the code.');
+    return redact(lines.join('\n'));
+  }
+
+  /** Running sessions in the same checkout that edited the same files: they can overwrite each other's work. */
+  collisionsOf(p) {
+    const byCheckout = new Map();
+    for (const id of p.sessionIds) {
+      if (!this.live.get(id)?.live) continue;
+      const meta = this.index.get(id);
+      if (!meta?.cwd) continue;
+      const r = this.registry.resolve(meta.cwd);
+      const checkout = r?.worktree || r?.root || meta.cwd;
+      if (!byCheckout.has(checkout)) byCheckout.set(checkout, []);
+      byCheckout.get(checkout).push(meta);
+    }
+    const out = [];
+    for (const [checkout, metas] of byCheckout) {
+      if (metas.length < 2) continue;
+      const shared = new Map();
+      for (const m of metas) for (const f of Object.keys(m.files || {})) shared.set(f, (shared.get(f) || 0) + 1);
+      const both = [...shared].filter(([, n]) => n > 1).map(([f]) => path.relative(checkout, f) || f);
+      if (!both.length) continue;
+      const names = both.slice(0, 3).join(', ') + (both.length > 3 ? ` and ${both.length - 3} more` : '');
+      out.push({ kind: 'collision', severity: 'warn', text: `${metas.length} running sessions in ${path.basename(checkout)} are editing the same files (${names}): give one its own worktree`, sessionIds: metas.map((m) => m.id) });
+    }
+    return out;
+  }
+
   signalsOf(p, procs) {
     const out = [];
     const now = Date.now();
@@ -266,6 +321,7 @@ export class Views {
     const status = this.effectiveStatus(p);
     const days = (t) => Math.round((now - t) / DAY);
     if (status === 'archived' || status === 'done') return out;
+    out.push(...this.collisionsOf(p));
     const changes = st?.ok ? st.dirty + st.untracked : 0;
     if (changes > 0 && last && now - last > 5 * DAY && now - last < 120 * DAY) out.push({ kind: 'dirty', severity: 'warn', text: `${changes} uncommitted change${changes > 1 ? 's' : ''}, untouched for ${days(last)} days` });
     if (st?.ok && st.ahead > 0 && now - (st.lastCommitAt || 0) > 2 * DAY) out.push({ kind: 'unpushed', severity: 'warn', text: `${st.ahead} commit${st.ahead > 1 ? 's' : ''} on ${st.branch} not pushed` });
@@ -315,7 +371,16 @@ export class Views {
     const st = this.registry.gitOf(p.path).status;
     const brief = this.ai.state.projects[p.path]?.brief;
     let liveCount = 0;
-    for (const id of p.sessionIds) if (this.live.get(id)?.live) liveCount++;
+    const tokens = { input: 0, output: 0, cacheWrite: 0, cacheRead: 0, total: 0 };
+    let counted = 0;
+    for (const id of p.sessionIds) {
+      if (this.live.get(id)?.live) liveCount++;
+      const t = tokensOf(this.index.meta.get(id));
+      if (t) {
+        counted++;
+        for (const k in tokens) tokens[k] += t[k];
+      }
+    }
     const stack = this.stackOf(p);
     p.stack = stack;
     const ws = over.workspace || p.workspace;
@@ -350,6 +415,7 @@ export class Views {
       attention: this.signalsOf(p, procs),
       threadCount: brief?.threads?.length || 0,
       hasBrief: !!brief,
+      tokens: counted ? tokens : null, // all time, the sessions whose usage is recorded (Claude Code)
     };
   }
 
@@ -486,7 +552,8 @@ export class Views {
       if ((meta.lastAt || 0) < since) continue; // don't load turns of sessions outside the window
       const pr = projOf(meta.cwd);
       const turns = this.index.loadTurns(meta.id);
-      for (const t of turns) {
+      for (let i = meta.inherited?.n || 0; i < turns.length; i++) {
+        const t = turns[i]; // (a fork's copied first turns are counted in its parent)
         if (t.o !== 'h' && t.o !== 's') continue;
         if (!t.t || t.t < since) continue;
         const d = bump(isoDay(t.t), 'prompts', pr);
@@ -514,6 +581,11 @@ export class Views {
 
   dayDetail(day) {
     const [start, end] = dayRange(day);
+    return { day, blocks: this.blocksBetween(start, end) };
+  }
+
+  /** Work blocks and automation runs that overlap [start, end), oldest first (History's day view, standups). */
+  blocksBetween(start, end) {
     const blocks = [];
     for (const meta of this.index.list()) {
       if (meta.lastAt < start || meta.startedAt > end) continue;
@@ -530,7 +602,101 @@ export class Views {
       }
     }
     blocks.sort((a, b) => a.startAt - b.startAt);
-    return { day, blocks };
+    return blocks;
+  }
+
+  /**
+   * What was worked on in [from, to), per project (most recent first), from the work blocks' AI summaries; a block
+   * without one shows its session title. One line per piece of work: a session's unsummarized blocks merge, and so do
+   * summaries with the same title (the later one wins). Plus the running sessions waiting for the user.
+   */
+  standup({ from, to, projectId = null }) {
+    const groups = new Map();
+    for (const b of this.blocksBetween(from, to)) {
+      if (b.kind !== 'block' || (projectId && b.projectId !== projectId)) continue;
+      const p = b.projectId ? this.registry.byId(b.projectId) : null;
+      if (p && this.store.project(p.path).hidden) continue;
+      let g = groups.get(b.projectId || '');
+      if (!g) groups.set(b.projectId || '', (g = { id: b.projectId || null, name: b.projectName || 'Other folders', lastAt: 0, items: [], seen: new Map() }));
+      const d = b.digest;
+      const title = oneLine(plain(d?.title || '')) || b.sessionTitle;
+      const item = {
+        title,
+        status: d?.status || null,
+        detail: d ? clip(plain(d.outcome || d.summary || ''), 240) : '',
+        next: d && d.status !== 'done' && d.nextStep ? shortTitle(d.todo, d.nextStep) : '',
+        summarized: !!d,
+        sessionId: b.sessionId,
+        sessionTitle: b.sessionTitle,
+        startAt: b.startAt,
+        endAt: b.endAt,
+        live: !!b.live,
+      };
+      const key = d ? `t:${title.toLowerCase()}` : `s:${b.sessionId}`;
+      const prev = g.seen.get(key);
+      if (prev) Object.assign(prev, item, { startAt: prev.startAt });
+      else {
+        g.items.push(item);
+        g.seen.set(key, item);
+      }
+      g.lastAt = Math.max(g.lastAt, b.endAt || 0);
+    }
+    const projects = [...groups.values()].sort((a, b) => b.lastAt - a.lastAt).map(({ seen, ...g }) => g);
+    const waiting = this.listSessions({ liveOnly: true, limit: 100 })
+      .filter((s) => needsYou(s) && (!projectId || s.projectId === projectId))
+      .map((s) => ({ id: s.id, title: s.title, projectId: s.projectId, projectName: s.projectName, detail: s.live.detail || 'Waiting for you', bridgeUrl: s.live.bridgeUrl || null }));
+    return { projects, needsYou: waiting };
+  }
+
+  /**
+   * Tokens spent in the local days from..to (YYYY-MM-DD, inclusive): per day, per project and the top sessions, from
+   * each session's per-day usage in the index. Every session counts, automations and hidden ones included: they spent
+   * the tokens. `pending`: Claude sessions not counted yet (older index entries the background backfill hasn't reached).
+   */
+  usage({ fromDay, toDay, projectId = null, top = 10 }) {
+    const zero = () => ({ input: 0, output: 0, cacheWrite: 0, cacheRead: 0, total: 0 });
+    const add = (t, u) => {
+      t.input += u[0];
+      t.output += u[1];
+      t.cacheWrite += u[2];
+      t.cacheRead += u[3];
+      t.total += u[0] + u[1] + u[2] + u[3];
+    };
+    const days = new Map();
+    for (let d = new Date(`${fromDay}T12:00:00`); isoDay(d) <= toDay; d.setDate(d.getDate() + 1)) days.set(isoDay(d), { day: isoDay(d), ...zero() });
+    const totals = zero();
+    const projects = new Map();
+    const sessions = [];
+    for (const meta of this.index.list()) {
+      const usageDays = ownUsage(meta)?.usageDays; // a fork's copied lines count in its parent only
+      if (!usageDays) continue;
+      const p = this.registry.projectOfSession(meta);
+      if (projectId && p?.id !== projectId) continue;
+      const st = zero();
+      for (const [day, u] of Object.entries(usageDays)) {
+        if (day < fromDay || day > toDay) continue;
+        add(st, u);
+        add(days.get(day), u);
+      }
+      if (!st.total) continue;
+      for (const k in totals) totals[k] += st[k];
+      const key = p?.id || '';
+      let g = projects.get(key);
+      if (!g) projects.set(key, (g = { id: p?.id || null, name: p ? this.store.project(p.path).name || p.name : 'Other folders', ...zero(), sessions: 0 }));
+      for (const k in st) g[k] += st[k];
+      g.sessions++;
+      sessions.push({ meta, p, t: st });
+    }
+    sessions.sort((a, b) => b.t.total - a.t.total);
+    return {
+      fromDay,
+      toDay,
+      totals,
+      days: [...days.values()],
+      projects: [...projects.values()].sort((a, b) => b.total - a.total),
+      sessions: sessions.slice(0, top).map(({ meta, p, t }) => ({ id: meta.id, title: this.sessionTitle(meta, null), projectId: p?.id || null, projectName: p ? this.store.project(p.path).name || p.name : null, lastAt: meta.lastAt, kind: this.sessionKind(meta), ...t })),
+      pending: this.index.usagePending ? this.index.usagePending() : 0,
+    };
   }
 
   /**
@@ -723,6 +889,23 @@ export class Views {
         };
       });
   }
+}
+
+/**
+ * A session's recorded token usage (Claude Code transcripts), or null: another harness, no transcript, or not counted
+ * yet. A fork's copied lines are left out (they count in the parent).
+ */
+export function tokensOf(meta) {
+  const u = ownUsage(meta)?.usage;
+  if (!u || !meta.file || (meta.harness || 'claude') !== 'claude') return null;
+  return { input: u.in, output: u.out, cacheWrite: u.cw, cacheRead: u.cr, total: u.in + u.out + u.cw + u.cr };
+}
+
+/** A running session waiting for the user (the web's "Needs you"): a terminal session asking for input or a permission,
+ * or a background one that is blocked. Takes a sessionSummary(). */
+export function needsYou(s) {
+  if (!s?.live) return false;
+  return s.live.kind === 'background' ? s.live.state === 'blocked' : s.live.status === 'waiting';
 }
 
 function shellPath(p) {

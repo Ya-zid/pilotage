@@ -786,6 +786,27 @@ const items = W.TASKS.map((x) => {
 });
 writeJSON(path.join(DATA, 'work.json'), { version: 1, items, spinoffs: [], tombstones: [], meta: { lastExtractAt: 0, lastExtract: null, v3Suggested: NOW } });
 
+// claude.ai chats, as an import of the official export would leave them (server/sources/claude-ai.js)
+writeJSON(path.join(DATA, 'claude-ai.json'), {
+  version: 1,
+  importedAt: NOW - DAY,
+  source: { kind: 'zip', from: '~/Downloads/data-2026-11-20.zip' },
+  total: W.CHATS.length,
+  skipped: 0,
+  chats: W.CHATS.map((c) => ({
+    uuid: c.uuid,
+    name: c.name,
+    createdAt: NOW + c.day * DAY - 3600e3,
+    updatedAt: NOW + c.day * DAY,
+    messages: c.messages,
+    humanMessages: Math.ceil(c.messages / 2),
+    firstPrompt: c.first,
+    lastPrompt: c.last,
+    search: [c.first, c.last].filter(Boolean).join(' · '),
+    projectPaths: c.project ? [path.join(HOME, c.project)] : [],
+  })),
+});
+
 // ------------------------------------------------------------------------------------------------ running sessions
 
 const live = sessions

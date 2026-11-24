@@ -1,10 +1,10 @@
 // Pilotage UI primitives. See docs/DESIGN.md for when to use each one.
-import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { ArrowDownRight, ArrowUpRight, Check, ChevronRight, Copy, Loader2, X } from 'lucide-react';
+import { ArrowDownRight, ArrowUpRight, Check, ChevronRight, Copy, Image as ImageIcon, Loader2, X } from 'lucide-react';
 import { ago, copy, fmtDateTime, DIGEST_STATUS, wsColor, plainText, splitPath } from '../util';
 
 type CSSVars = React.CSSProperties & Record<`--${string}`, string | number | undefined>;
@@ -480,6 +480,34 @@ export function Toolbar({ children, className = '' }: { children: React.ReactNod
 export const ToolbarSpacer = () => <div className="toolbar-spacer" />;
 
 // ---------- text ----------
+const InMarkdownLink = createContext(false);
+/**
+ * Markdown images never load here: the page's CSP blocks other sites' images, and a README's relative paths
+ * (docs/shot.png) point at nothing in Pilotage, so they showed as broken icons. An image is its alt text instead, a
+ * link to it when it has a web address (inside a link, a badge: plain text, the link around it still works).
+ */
+function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
+  const inLink = useContext(InMarkdownLink);
+  const label = (
+    <>
+      <ImageIcon size={13} aria-hidden="true" />
+      {alt || 'image'}
+    </>
+  );
+  if (!inLink && src && /^https?:\/\//i.test(src)) {
+    return (
+      <a className="md-img" href={src} target="_blank" rel="noreferrer noopener" title={src}>
+        {label}
+      </a>
+    );
+  }
+  return (
+    <span className="md-img" title={src || undefined}>
+      {label}
+    </span>
+  );
+}
+
 export function Markdown({ text, className = '' }: { text: string; className?: string }) {
   return (
     <div className={`prose ${className}`}>
@@ -489,9 +517,10 @@ export function Markdown({ text, className = '' }: { text: string; className?: s
         components={{
           a: ({ href, children }) => (
             <a href={href} target="_blank" rel="noreferrer noopener">
-              {children}
+              <InMarkdownLink.Provider value={true}>{children}</InMarkdownLink.Provider>
             </a>
           ),
+          img: ({ src, alt }) => <MarkdownImage src={src} alt={alt} />,
         }}
       >
         {text}
@@ -887,18 +916,50 @@ if (typeof window !== 'undefined') {
   });
 }
 
+const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"]), [contenteditable="true"]';
+/** The dialog's controls a Tab can reach, in order (hidden ones left out). */
+const focusables = (root: HTMLElement) => [...root.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => el.getClientRects().length > 0);
+
 export function Modal({ title, onClose, children, footer, wide = false, className = '' }: { title?: React.ReactNode; onClose: () => void; children: React.ReactNode; footer?: React.ReactNode; wide?: boolean; className?: string }) {
   const ref = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
   const idRef = useRef(0);
   if (!idRef.current) idRef.current = ++sheetSeq;
+  const titleId = useId();
+  // What had focus before the dialog opened (read before a child's autoFocus moves it): it gets focus back on close.
+  const [opener] = useState(() => (typeof document !== 'undefined' ? (document.activeElement as HTMLElement | null) : null));
   useEffect(() => {
     const id = idRef.current;
     sheetStack.push({ id, close: () => closeRef.current() });
     scheduleSheetSync();
+    const top = () => sheetStack[sheetStack.length - 1]?.id === id;
+    // Focus moves into the dialog: a child's autoFocus wins; else the first control (on a phone the sheet itself, so
+    // the keyboard doesn't pop up).
+    const box = ref.current;
+    if (box && !box.contains(document.activeElement)) {
+      const first = phoneSheets() ? null : focusables(box).find((el) => !el.closest('.modal-head'));
+      (first || box).focus({ preventScroll: true });
+    }
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && sheetStack[sheetStack.length - 1]?.id === id) closeRef.current();
+      if (e.key === 'Escape' && top()) closeRef.current();
+      // Tab stays inside the top dialog: it cycles over its own controls, never into the page behind the overlay.
+      if (e.key === 'Tab' && top() && ref.current) {
+        const els = focusables(ref.current);
+        if (!els.length) {
+          e.preventDefault();
+          ref.current.focus();
+          return;
+        }
+        const i = els.indexOf(document.activeElement as HTMLElement);
+        if (e.shiftKey && i <= 0) {
+          e.preventDefault();
+          els[els.length - 1].focus();
+        } else if (!e.shiftKey && (i === -1 || i === els.length - 1)) {
+          e.preventDefault();
+          els[0].focus();
+        }
+      }
     };
     window.addEventListener('keydown', onKey);
     const prev = document.body.style.overflow;
@@ -909,6 +970,9 @@ export function Modal({ title, onClose, children, footer, wide = false, classNam
       scheduleSheetSync();
       window.removeEventListener('keydown', onKey);
       document.body.style.overflow = prev;
+      // Back to what opened it, unless focus already went somewhere else on purpose.
+      const now = document.activeElement;
+      if (opener && opener.isConnected && (!now || now === document.body || box?.contains(now))) opener.focus({ preventScroll: true });
     };
   }, []);
 
@@ -953,11 +1017,11 @@ export function Modal({ title, onClose, children, footer, wide = false, classNam
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className={`modal${wide ? ' wide' : ''} ${className}`} ref={ref} role="dialog" aria-modal="true">
+      <div className={`modal${wide ? ' wide' : ''} ${className}`} ref={ref} role="dialog" aria-modal="true" aria-labelledby={title !== undefined ? titleId : undefined} tabIndex={-1}>
         <div className="sheet-grab" aria-hidden="true" {...dragProps} />
         {title !== undefined && (
           <div className="modal-head" {...dragProps}>
-            <h2>{title}</h2>
+            <h2 id={titleId}>{title}</h2>
             <button className="btn ghost icon sm" onClick={onClose} aria-label="Close">
               <X size={18} />
             </button>
