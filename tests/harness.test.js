@@ -14,6 +14,15 @@ process.env.PILOTAGE_DATA = fs.mkdtempSync(path.join(os.tmpdir(), 'pilotage-harn
 // Launch tests check the WSL + Windows Terminal path (refusals before anything starts) on every OS. Outside WSL a
 // Claude terminal launch would fall back to a real `claude --bg`, which a test must never start.
 process.env.PILOTAGE_WSL = '1';
+// A fake Windows profile with a stand-in wt.exe that does nothing: the tests never use the real Windows profile or
+// open a real Windows Terminal tab, and without a wt.exe Claude launches would fall back to a real `claude --bg`.
+{
+  const winHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pilotage-harness-winhome-'));
+  const apps = path.join(winHome, 'AppData', 'Local', 'Microsoft', 'WindowsApps');
+  fs.mkdirSync(apps, { recursive: true });
+  fs.writeFileSync(path.join(apps, 'wt.exe'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  process.env.PILOTAGE_WIN_HOME = winHome;
+}
 process.env.CODEX_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'pilotage-codex-home-')); // never the real ~/.codex
 const { ensureDirs, paths } = await import('../server/config.js');
 ensureDirs();
