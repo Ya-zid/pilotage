@@ -543,6 +543,8 @@ test("Pilotage's claude -p calls don't bill an ANTHROPIC_API_KEY that happens to
   assert.equal(env.PATH, `/usr/bin:${path.dirname(process.execPath)}`, "the user's PATH first, Pilotage's node last (for claude's children)");
   const opted = claudeEnv({ ...shell, PILOTAGE_USE_ANTHROPIC_API_KEY: '1' });
   assert.equal(opted.ANTHROPIC_API_KEY, 'sk-ant-x', 'kept when asked for');
+  const gw = claudeEnv({ ...shell, ANTHROPIC_BASE_URL: 'https://gateway.example/v1' });
+  assert.equal(gw.ANTHROPIC_AUTH_TOKEN, 't', 'a gateway keeps its token (never sent without it)');
 });
 
 test('phone forwarder revive: waits two misses, leaves a user stop alone, backs off, gives up without a firewall rule', async () => {
@@ -566,8 +568,19 @@ test('phone forwarder revive: waits two misses, leaves a user stop alone, backs 
   st = reviveResult(st, { ok: false, needsFirewall: true }, t);
   st = reviveStep(reviveStep(st, { hb, running: false, now: t + 99e6 }), { hb, running: false, now: t + 99e6 });
   assert.equal(st.action, 'none');
-  // A success resets everything.
-  assert.deepEqual(reviveResult(st, { ok: true }, t), { misses: 0, failures: 0, nextTryAt: 0, gaveUp: false });
+  // A restart that "worked" counts only once the forwarder is seen running.
+  let loop = { misses: 0, failures: 0, nextTryAt: 0, gaveUp: false, checking: false };
+  let restarts = 0;
+  for (let m = 0; m < 120; m += 1) {
+    loop = reviveStep(loop, { hb, running: false, now: t + m * 60e3 });
+    if (loop.action === 'try') {
+      restarts++;
+      loop = reviveResult(loop, { ok: true }, t + m * 60e3); // Start-Process succeeded, but it dies at once
+    }
+  }
+  assert.ok(restarts <= 6, `a crash loop backs off (${restarts} restarts in 2 hours)`);
+  const seen = reviveStep({ ...loop, checking: true, failures: 2 }, { hb, running: true, now: t });
+  assert.equal(seen.failures, 0, 'seen running: everything resets');
 });
 
 test('a 5-hour usage reading holds until its window resets, even when the statusline file stops being refreshed', () => {
@@ -789,9 +802,11 @@ test('a prompt with several screenshots (a line over 6 MB) is indexed, and each 
   const f = path.join(dir, `${id}.jsonl`);
   const base = { isSidechain: false, cwd: '/home/alex/demo', sessionId: id, entrypoint: 'cli' };
   const img = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo' + 'A'.repeat(2_300_000) } };
+  // One big screenshot (6.5 M base64 characters, ~4.9 MB): a backtracking regex over it overflows V8's stack.
+  const bigImg = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo' + 'B'.repeat(6_500_000) } };
   let s = line({ ...base, type: 'user', turnOrigin: 'human', message: { role: 'user', content: 'First small prompt' }, timestamp: '2026-11-01T10:00:00.000Z' });
   s += line({ ...base, type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'Answer one' }] }, timestamp: '2026-11-01T10:00:05.000Z' });
-  s += line({ ...base, type: 'user', turnOrigin: 'human', message: { role: 'user', content: [{ type: 'text', text: 'Fix the layout shown in these screenshots' }, img, img, img] }, timestamp: '2026-11-01T10:05:00.000Z' });
+  s += line({ ...base, type: 'user', turnOrigin: 'human', message: { role: 'user', content: [{ type: 'text', text: 'Fix the layout shown in these screenshots' }, img, img, bigImg] }, timestamp: '2026-11-01T10:05:00.000Z' });
   s += line({ ...base, type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'Fixed the layout' }] }, timestamp: '2026-11-01T10:06:00.000Z' });
   fs.writeFileSync(f, s);
   const st = fs.statSync(f);
@@ -816,4 +831,39 @@ test('redaction: JWTs after URL escapes, curl -u anywhere on the line, and no sl
   const t0 = performance.now();
   redact(slow);
   assert.ok(performance.now() - t0 < 400, 'spaces after a secret-sounding key stay fast');
+});
+
+test("Pilotage's claude -p calls run in a private folder with no CLAUDE.md or Claude settings above it", async () => {
+  const { ROOT, isInternalPath } = await import('../server/config.js');
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'pilotage-aicwd-')));
+  fs.writeFileSync(path.join(home, 'CLAUDE.md'), 'Always answer in French.\n'); // a user's ~/CLAUDE.md
+  const fake = path.join(home, '.local/bin/claude'); // CLAUDE_BIN looks here first: the real claude never runs
+  fs.mkdirSync(path.dirname(fake), { recursive: true });
+  fs.writeFileSync(fake, '#!/bin/sh\ncat >/dev/null\nprintf \'{"type":"result","subtype":"success","is_error":false,"result":"%s"}\' "$(pwd -P)"\n', { mode: 0o755 });
+  const url = (f) => JSON.stringify(new URL(f, import.meta.url).href);
+  const script = `
+    const fs = await import('node:fs');
+    const c = await import(${url('../server/config.js')});
+    if (c.CLAUDE_BIN !== ${JSON.stringify(fake)}) throw new Error('not the fake claude: ' + c.CLAUDE_BIN);
+    const r = await (await import(${url('../server/ai/runner.js')})).callClaude({ instruction: 'Summarize.', input: 'x', timeout: 20000 });
+    console.log(JSON.stringify({ r, mode: r.ok ? fs.statSync(r.data).mode & 0o777 : null }));`;
+  const out = execFileSync(process.execPath, ['--input-type=module', '-e', script], { env: { HOME: home, PATH: '/usr/bin:/bin', PILOTAGE_WSL: '0', PILOTAGE_DATA: path.join(home, 'data') }, encoding: 'utf8', timeout: 30000 });
+  const { r, mode } = JSON.parse(out.trim().split('\n').pop());
+  assert.equal(r.ok, true, JSON.stringify(r));
+  const cwd = r.data;
+  const found = [];
+  for (let d = cwd; ; d = path.dirname(d)) {
+    for (const f of ['CLAUDE.md', 'CLAUDE.local.md', '.claude/CLAUDE.md', '.claude/settings.json', '.claude/settings.local.json']) if (fs.existsSync(path.join(d, f))) found.push(path.join(d, f));
+    if (path.dirname(d) === d) break;
+  }
+  assert.deepEqual(found, [], `Claude Code would load these into every summary (cwd ${cwd})`);
+  assert.ok(!isInside(cwd, home) && !isInside(cwd, ROOT), 'outside the home folder and the Pilotage folder');
+  assert.equal(mode, 0o700, 'only the user can read it');
+  assert.ok(!fs.existsSync(cwd), 'removed when Pilotage exits');
+  // Pilotage's own AI calls are never shown as sessions or projects: this folder, any earlier run's, and the old one.
+  assert.ok(isInternalPath(cwd));
+  assert.ok(isInternalPath(path.join(path.dirname(cwd), 'pilotage-ai-OLDRUN')));
+  assert.ok(isInternalPath(path.join(process.env.PILOTAGE_DATA, 'ai-sandbox')), 'sessions already indexed under data/ai-sandbox stay hidden');
+  assert.ok(!isInternalPath(home) && !isInternalPath(path.join(os.tmpdir(), 'pilotage-airline')) && !isInternalPath(''));
+  fs.rmSync(home, { recursive: true, force: true });
 });

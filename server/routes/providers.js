@@ -15,6 +15,15 @@ import { HARNESSES } from '../launch.js';
 const CLAUDE_MODEL_RX = /^(haiku|sonnet|opus|fable|claude-[a-z0-9][\w.-]{0,60})$/;
 const KEY_RX = /^[\x21-\x7e]{8,400}$/;
 
+/** Real path through symlinks, else the path as given. */
+function realOr(p) {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return p;
+  }
+}
+
 function isDir(p) {
   try {
     return fs.statSync(p).isDirectory();
@@ -228,9 +237,11 @@ export default function ({ route, ctx }) {
         const d = String(raw || '').trim().replace(/\/+$/, '');
         if (!d) continue;
         if (!path.isAbsolute(d)) return fail(res, 400, `Not an absolute WSL path: ${clip(d, 120)}`);
-        if (d === CLAUDE_DIR || d === WIN_CLAUDE_DIR) return fail(res, 400, `${d} is already indexed`);
+        // Compared by real path: a link to ~/.claude (or to another extra dir) would index every transcript twice.
+        const real = realOr(d);
+        if ([CLAUDE_DIR, WIN_CLAUDE_DIR].some((x) => x && realOr(x) === real)) return fail(res, 400, `${clip(d, 120)} is already indexed`);
         if (!isDir(path.join(d, 'projects'))) return fail(res, 400, `No projects/ folder in ${clip(d, 120)} (expected a Claude config dir)`);
-        if (!dirs.includes(d)) dirs.push(d);
+        if (!dirs.some((x) => realOr(x) === real)) dirs.push(d);
       }
       sources.extraClaudeDirs = dirs;
     }
@@ -243,6 +254,7 @@ export default function ({ route, ctx }) {
       store.patchSettings({ sources });
       rescan();
     }
+    broadcast('settings'); // other open devices refresh their agent list and filters
     json(res, { ...(await harnessesPayload()), rescanning: Object.keys(sources).length > 0 });
   });
 }

@@ -24,7 +24,7 @@ process.env.PILOTAGE_WSL = '1';
   process.env.PILOTAGE_WIN_HOME = winHome;
 }
 process.env.CODEX_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'pilotage-codex-home-')); // never the real ~/.codex
-const { ensureDirs, paths } = await import('../server/config.js');
+const { ensureDirs, paths, aiWorkDir } = await import('../server/config.js');
 ensureDirs();
 const { parseCodexFile, codexAdapter, codexToolSummary } = await import('../server/sources/harness/codex.js');
 const { parseGeminiChat, geminiAdapter } = await import('../server/sources/harness/gemini.js');
@@ -129,8 +129,11 @@ test('codex adapter scan: incremental, skips empty rollouts and Pilotage\'s own 
   const meta0 = (id, cwd) => line({ timestamp: '2026-11-01T11:00:00.000Z', type: 'session_meta', payload: { id, cwd, cli_version: '0.58.0', source: 'exec' } });
   const emptyId = '11111111-1111-7111-8111-111111111111';
   const ownId = '22222222-2222-7222-8222-222222222222';
+  const oldOwnId = '33333333-3333-7333-8333-333333333333';
+  const ask = line({ timestamp: '2026-11-01T11:01:00.000Z', type: 'event_msg', payload: { type: 'user_message', message: 'Summarize the work block', images: [] } });
   fs.writeFileSync(path.join(day, `rollout-2026-11-01T11-00-00-${emptyId}.jsonl`), meta0(emptyId, '/home/alex/demo'));
-  fs.writeFileSync(path.join(day, `rollout-2026-11-01T11-01-00-${ownId}.jsonl`), meta0(ownId, paths.aiSandbox) + line({ timestamp: '2026-11-01T11:01:00.000Z', type: 'event_msg', payload: { type: 'user_message', message: 'Summarize the work block', images: [] } }));
+  fs.writeFileSync(path.join(day, `rollout-2026-11-01T11-01-00-${ownId}.jsonl`), meta0(ownId, aiWorkDir()) + ask);
+  fs.writeFileSync(path.join(day, `rollout-2026-11-01T11-02-00-${oldOwnId}.jsonl`), meta0(oldOwnId, path.join(process.env.PILOTAGE_DATA, 'ai-sandbox')) + ask); // where earlier versions ran it
   const first = await codexAdapter.scan({ known: new Map() });
   assert.deepEqual(first.metas.map((m) => m.id), [`codex-${UUID}`]);
   assert.equal(first.turns.get(`codex-${UUID}`).length, 3);

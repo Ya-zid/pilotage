@@ -25,6 +25,7 @@
 // - A new session loop never hides inside a task the user closed as done before it (recurring work: deploy again,
 //   rerun the tests): it becomes a new item. Loops matching a task they dropped still attach to it, so it stays gone.
 import { hash, oneLine, clip } from '../util.js';
+import { HOME, WIN_HOME } from '../config.js';
 import { OPEN_STATUSES, AI_KINDS, normalizeItem } from './store.js';
 import { userName, nameRxSource } from '../profile.js';
 
@@ -210,7 +211,17 @@ const whoOf = (w) => (WHO.has(w) ? w : null);
 export const stepText = (detail) => String(detail || '').split(/\n\s*\n/)[0].trim();
 
 /** Same folder, or one inside the other (a repo and its subfolder are often separate projects about the same work). */
-export const relatedPaths = (a, b) => !!a && !!b && (a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`));
+/**
+ * The same project, or one inside the other. A workspace base (the home folder, Windows' profile) is nobody's parent:
+ * running claude once in ~ makes a "Home folder" project, which would otherwise swallow every project's suggestions
+ * and, once a suggestion there is deleted, hide look-alikes everywhere.
+ */
+export const relatedPaths = (a, b, bases = []) => {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  if (bases.includes(a) || bases.includes(b)) return false;
+  return a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
+};
 
 const blockIndex = (key) => Number(String(key).split(':').pop()) || 0;
 const projectHash = (p) => hash(p, 10);
@@ -402,10 +413,10 @@ function evidenceFor(item, input, ix, current, stats, now = Date.now()) {
 
 // ---------------------------------------------------------------- reconcile
 
-function isTombstoned(data, c) {
+function isTombstoned(data, c, bases = []) {
   for (const t of data.tombstones || []) {
     if (t.keys?.includes(c.key)) return true;
-    if (relatedPaths(t.projectPath, c.projectPath) && similar(t.title, c.title)) return true;
+    if (relatedPaths(t.projectPath, c.projectPath, bases) && similar(t.title, c.title)) return true;
   }
   return false;
 }
@@ -414,6 +425,7 @@ function isTombstoned(data, c) {
  * Bring data.items in line with the AI state. Mutates `data`; returns stats (stats.changed tells whether to save).
  */
 export function reconcile(data, input, now = Date.now()) {
+  const bases = input.bases || [];
   const stats = { created: 0, attached: 0, refreshed: 0, closed: 0, dropped: 0, reopened: 0, expired: 0, pruned: 0, hints: 0, changed: false, candidates: 0 };
   data.items = (data.items || []).map((it) => (it.keys && it.launches ? it : normalizeItem(it)));
   const ix = buildIndex(input);
@@ -441,10 +453,10 @@ export function reconcile(data, input, now = Date.now()) {
         }
       }
     } else {
-      if (isTombstoned(data, c)) continue;
+      if (isTombstoned(data, c, bases)) continue;
       const loose = (it) => (it.source.kind === 'brief') !== c.key.startsWith('brf:') || it.source.kind === 'user' || it.source.kind === 'idea';
       // The same title, or the same step in other words (the detail is the step text the title was made from).
-      const same = (it) => relatedPaths(it.projectPath, c.projectPath) && (similar(it.title, c.title, { loose: loose(it) }) || similar(stepText(it.detail), c.detail));
+      const same = (it) => relatedPaths(it.projectPath, c.projectPath, bases) && (similar(it.title, c.title, { loose: loose(it) }) || similar(stepText(it.detail), c.detail));
       // A session loop newer than the moment the user marked a lookalike task done is new work (deploy again, rerun):
       // attaching it there would hide it, since closed cards show no AI hint. AI-closed items can still take it (the
       // evidence reopens them), and so can dropped ones, so a loop the user threw away doesn't come back.
@@ -584,6 +596,7 @@ export function capSuggestions(items, now = Date.now(), max = MAX_OPEN_SUGGESTIO
 /** Build reconcile() input from the running server's objects. `jobSession(bgId)` reads a background job's session id. */
 export function liveInput({ ai, index, registry, store, views, getLaunch, jobSession }) {
   return {
+    bases: [HOME, WIN_HOME].filter(Boolean),
     blocks: ai.state.blocks,
     briefs: ai.state.projects,
     projectOfSession: (sid, fallback) => {

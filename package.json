@@ -1,6 +1,6 @@
 {
   "name": "pilotage-cli",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "A local web cockpit for your Claude Code (and Codex / Gemini CLI) sessions: projects, live sessions, AI summaries, tasks, phone access.",
   "keywords": [
     "claude-code",

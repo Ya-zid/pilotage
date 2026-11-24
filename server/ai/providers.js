@@ -1,14 +1,14 @@
 // AI providers. Every AI job (digests, briefs, daily, CV) goes through callAI(), whichever model runs it:
 //   claude-cli         headless `claude -p` on the subscription (runner.js). Optional configDir pins a Claude
 //                      account (CLAUDE_CONFIG_DIR). The 5h/7d usage guard (usage.js) applies to this one only.
-//   codex-cli          `codex exec`, read-only sandbox, in data/ai-sandbox, --output-schema for the JSON shape.
+//   codex-cli          `codex exec`, read-only sandbox, in config.aiWorkDir(), --output-schema for the JSON shape.
 //   openai-compatible  POST {baseUrl}/chat/completions: DeepSeek, OpenRouter, OpenAI, Groq, Ollama or custom.
 // Non-Claude providers have a daily call cap (settings.ai.dailyCallCap, 0 = none).
 // API keys live only in data/secrets.json (0600) → providerKeys[preset]. Never logged, never returned.
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { paths, DATA, CLAUDE_BIN, HOME } from '../config.js';
+import { aiWorkDir, DATA, CLAUDE_BIN, HOME } from '../config.js';
 import { runWithInput, clip, redact, readJSONSync, writeJSONSync, isoDay } from '../util.js';
 import { callClaude } from './runner.js';
 import { getStore } from '../store.js';
@@ -289,8 +289,7 @@ function codexDefaultModel() {
 async function callCodex({ instruction, input, schema, model, effort, timeout }) {
   const bin = findBin('codex');
   if (!bin) return { ok: false, error: 'Codex CLI not found (npm i -g @openai/codex, then codex login)', ms: 0, notSent: true };
-  const dir = paths.aiSandbox;
-  fs.mkdirSync(dir, { recursive: true });
+  const dir = aiWorkDir();
   const tag = crypto.randomBytes(6).toString('hex');
   const schemaFile = schema ? path.join(dir, `.codex-schema-${tag}.json`) : null;
   const outFile = path.join(dir, `.codex-out-${tag}.txt`);

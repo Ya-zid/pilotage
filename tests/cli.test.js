@@ -98,7 +98,7 @@ test('pilotage open on WSL prints the login link when no Windows opener works', 
     }
     assert.ok(up, 'server did not start');
     const out = execFileSync('bash', [CLI, 'open'], { env, encoding: 'utf8' });
-    assert.match(out, /\/auth\/login\?c=\w+/, 'no login link printed');
+    assert.match(out, /\/auth\/login\?c=[\w-]+/, 'no login link printed');
     assert.doesNotMatch(out, /Opened Pilotage/, 'claims a browser opened');
   } finally {
     proc.kill('SIGKILL');

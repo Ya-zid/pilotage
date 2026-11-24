@@ -139,8 +139,58 @@ export const SCAN_SKIP = new Set([
   '.cache', '__pycache__', 'site-packages', '.nvm', '.npm', 'snap', 'go', '.cargo', '.rustup',
 ]);
 
-/** Paths Pilotage itself creates; never shown as projects. */
+/**
+ * macOS: folders of the home folder that hold app data and media, not projects. Reading inside them raises privacy
+ * prompts ("node would like to access data from other apps", "... your Calendars", "... Apple Music"). Skipped only
+ * right under HOME: a project named Library elsewhere is still found.
+ */
+export const HOME_SKIP = new Set(process.platform === 'darwin' ? ['Library', 'Applications', 'Pictures', 'Music', 'Movies', 'Public'] : []);
+
+/** Paths Pilotage itself creates; never shown as projects or sessions (data/ai-sandbox: where earlier versions ran AI calls). */
 export const INTERNAL_PATHS = [path.join(ROOT, '.sandbox'), path.join(DATA, 'ai-sandbox')];
+
+const AI_DIR_PREFIX = 'pilotage-ai-';
+const TMP_ROOTS = (() => {
+  const t = os.tmpdir();
+  try {
+    return [...new Set([t, fs.realpathSync(t)])];
+  } catch {
+    return [t];
+  }
+})();
+let aiDir = null;
+
+/**
+ * The working folder of Pilotage's own `claude -p` / `codex exec` calls: a private (0700) folder in the system temp
+ * folder, made once per process (again if a temp cleaner removed it) and deleted on exit. Claude Code loads CLAUDE.md
+ * from its working folder and every folder above it, so a folder inside the Pilotage clone or under ~ would add
+ * Pilotage's contributor rules or the user's ~/CLAUDE.md to every summary.
+ */
+export function aiWorkDir() {
+  try {
+    if (aiDir && fs.statSync(aiDir).isDirectory()) return aiDir;
+  } catch {}
+  if (!aiDir)
+    process.once('exit', () => {
+      try {
+        fs.rmSync(aiDir, { recursive: true, force: true });
+      } catch {}
+    });
+  aiDir = fs.mkdtempSync(path.join(TMP_ROOTS[0], AI_DIR_PREFIX));
+  fs.chmodSync(aiDir, 0o700);
+  return aiDir;
+}
+
+/** Inside a folder Pilotage made for itself (INTERNAL_PATHS, or the AI calls' folder of this or an earlier run)? */
+export function isInternalPath(p) {
+  if (!p) return false;
+  const under = (parent) => {
+    const rel = path.relative(parent, p);
+    return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel)) ? rel : null;
+  };
+  if (INTERNAL_PATHS.some((x) => under(x) !== null)) return true;
+  return TMP_ROOTS.some((t) => under(t)?.split(path.sep)[0].startsWith(AI_DIR_PREFIX));
+}
 
 export const paths = {
   state: path.join(DATA, 'state.json'),
@@ -151,13 +201,13 @@ export const paths = {
   launchDir: path.join(DATA, 'launch'),
   logs: path.join(DATA, 'logs'),
   backups: path.join(DATA, 'backups'),
-  aiSandbox: path.join(DATA, 'ai-sandbox'),
   gitCache: path.join(DATA, 'index', 'git.json'),
+  worktreeRoots: path.join(DATA, 'index', 'worktree-roots.json'),
   netInfo: path.join(DATA, 'net.json'),
 };
 
 export function ensureDirs() {
-  for (const d of [DATA, path.dirname(paths.index), paths.turnsDir, paths.launchDir, paths.logs, paths.backups, paths.aiSandbox]) {
+  for (const d of [DATA, path.dirname(paths.index), paths.turnsDir, paths.launchDir, paths.logs, paths.backups]) {
     fs.mkdirSync(d, { recursive: true });
   }
   try {

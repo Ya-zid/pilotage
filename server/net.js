@@ -344,7 +344,7 @@ export async function stopForwarder({ byUser = false } = {}) {
 }
 
 let stoppedByUser = false;
-const revive = { misses: 0, failures: 0, nextTryAt: 0, gaveUp: false };
+const revive = { misses: 0, failures: 0, nextTryAt: 0, gaveUp: false, checking: false };
 
 /**
  * What the once-a-minute check should do (pure; tested). hb = the last heartbeat (null: never ran), running = fresh
@@ -352,14 +352,21 @@ const revive = { misses: 0, failures: 0, nextTryAt: 0, gaveUp: false };
  * and gives up when a restart said the firewall rule is gone (the user removed it; "Enable" starts over).
  */
 export function reviveStep(st, { hb, running, stoppedByUser: stopped, now = Date.now() }) {
-  if (!hb || stopped || running || st.gaveUp) return { ...st, misses: 0, action: 'none' };
+  // A restart only counts as working once the forwarder is seen running: one that dies right after starting (port
+  // taken by another program) must back off, not restart every 2 minutes forever.
+  if (running) return { ...st, misses: 0, failures: 0, nextTryAt: 0, checking: false, action: 'none' };
+  if (st.checking) {
+    const failures = st.failures + 1;
+    st = { ...st, checking: false, failures, nextTryAt: failures >= 3 ? now + 30 * 60e3 : 0 };
+  }
+  if (!hb || stopped || st.gaveUp) return { ...st, misses: 0, action: 'none' };
   if (st.misses + 1 < 2) return { ...st, misses: st.misses + 1, action: 'none' };
   if (now < st.nextTryAt) return { ...st, misses: 0, action: 'none' };
   return { ...st, misses: 0, action: 'try' };
 }
 /** After a restart attempt (pure; tested). */
 export function reviveResult(st, r, now = Date.now()) {
-  if (r?.ok) return { misses: 0, failures: 0, nextTryAt: 0, gaveUp: false };
+  if (r?.ok) return { ...st, checking: true }; // confirmed (or counted as a failure) by the next check
   if (r?.needsFirewall) return { ...st, gaveUp: true };
   const failures = st.failures + 1;
   return { ...st, failures, nextTryAt: failures >= 3 ? now + 30 * 60e3 : 0 };

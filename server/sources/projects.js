@@ -3,10 +3,10 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { HOME, WIN_HOME, SCAN_SKIP, INTERNAL_PATHS, CLAUDE_DIR, WIN_CLAUDE_DIR, paths } from '../config.js';
+import { HOME, WIN_HOME, SCAN_SKIP, HOME_SKIP, isInternalPath, CLAUDE_DIR, WIN_CLAUDE_DIR, paths } from '../config.js';
 import { gitKind, statusOf, repoExtras, myCommitTimes, gitIdentities } from './git.js';
 import { projectKeyFor } from './sessions.js';
-import { readJSONSync, writeJSON, hash, isInside, pLimit, log, clip, isoDay } from '../util.js';
+import { readJSONSync, writeJSON, hash, isInside, pLimit, log, clip, isoDay, holdsProjects } from '../util.js';
 import { mergedWorkspaceKey } from '../workspaces.js';
 
 const WIN_PROJECTS = WIN_HOME ? path.join(WIN_HOME, 'Documents', 'Projects') : null;
@@ -142,6 +142,10 @@ export class ProjectRegistry {
     this.projects = new Map(); // path -> project
     this.resolveCache = new Map();
     this.git = readJSONSync(paths.gitCache, {}) || {}; // path -> {status, extras}
+    // Session folder -> main repo, for folders inside a git worktree. Once a worktree outside the repo is removed
+    // (`git worktree remove ../repo-feat`), nothing on disk ties the folder to its repo any more: without this its
+    // sessions would leave the repo for a phantom non-git project.
+    this.worktreeRoots = readJSONSync(paths.worktreeRoots, {}) || {};
     this.scanned = []; // candidate dirs from filesystem scan
     this.lastScanAt = 0;
     this.gitBusy = false;
@@ -149,7 +153,7 @@ export class ProjectRegistry {
 
   hidden(p) {
     const hiddenPaths = this.store.settings.scan.hiddenPaths || [];
-    return INTERNAL_PATHS.some((x) => isInside(p, x)) || hiddenPaths.some((x) => isInside(p, x));
+    return isInternalPath(p) || hiddenPaths.some((x) => isInside(p, x));
   }
 
   /** Walk scan roots for git repos / CLAUDE.md folders / top-level code folders. */
@@ -172,11 +176,11 @@ export class ProjectRegistry {
       }
       if (isRepo && depth > 0) return; // don't descend into repos (worktrees are found via git)
       if (depth >= maxDepth) return;
-      for (const e of ents) {
-        if (!e.isDirectory() || e.name.startsWith('.') || SCAN_SKIP.has(e.name)) continue;
-        if (ents.length > 400 && depth >= 1) continue; // huge generated folders (e.g. 900 concept dirs)
-        await walk(path.join(dir, e.name), depth + 1, maxDepth);
-      }
+      const subdirs = ents.filter((e) => e.isDirectory() && !e.name.startsWith('.') && !SCAN_SKIP.has(e.name) && !(dir === HOME && HOME_SKIP.has(e.name))).map((e) => e.name);
+      // Huge folders are usually generated (e.g. 900 concept dirs), unless they hold repos (~/code with 400+ projects).
+      // Below depth 1 only .git and CLAUDE.md make a project.
+      if (ents.length > 400 && depth >= 1 && !(await holdsProjects(dir, subdirs, ['.git', 'CLAUDE.md']))) return;
+      for (const name of subdirs) await walk(path.join(dir, name), depth + 1, maxDepth);
     };
     for (const r of roots) await walk(r.dir, 0, r.depth);
     this.scanned = [...found].filter((p) => !this.hidden(p));
@@ -189,8 +193,10 @@ export class ProjectRegistry {
     if (this.resolveCache.has(dir)) return this.resolveCache.get(dir);
     const base = baseOf(dir);
     let res = null;
+    const wasIn = this.worktreeRoots[dir];
+    if (wasIn && !fs.existsSync(dir)) res = { root: wasIn, worktree: null }; // a removed worktree: back to its repo
     // nearest ancestor with .git (stop at base)
-    let cur = dir;
+    let cur = res ? null : dir;
     while (cur && isInside(cur, base) && cur !== base) {
       const gk = gitKind(cur);
       if (gk) {
@@ -286,6 +292,7 @@ export class ProjectRegistry {
         w.lastAt = Math.max(w.lastAt, last);
       }
     }
+    const saving = this.saveWorktreeRoots(cwds);
     // Workspaces
     const tops = new Set([...projects.keys()].map((p) => topSegment(p).toLowerCase()));
     for (const p of projects.values()) {
@@ -303,7 +310,25 @@ export class ProjectRegistry {
       }
     }
     this.projects = projects;
+    await saving;
     return projects;
+  }
+
+  /**
+   * Remember which session folders sit in a worktree (see worktreeRoots); written only when it changes. The map is
+   * updated at once, only the write is awaited.
+   */
+  async saveWorktreeRoots(cwds) {
+    const next = {};
+    for (const cwd of cwds) {
+      const r = this.resolve(cwd);
+      if (r && (r.worktree || this.worktreeRoots[cwd] === r.root)) next[cwd] = r.root;
+    }
+    const prev = this.worktreeRoots;
+    const keys = Object.keys(next);
+    if (keys.length === Object.keys(prev).length && keys.every((k) => prev[k] === next[k])) return;
+    this.worktreeRoots = next;
+    await writeJSON(paths.worktreeRoots, next).catch((e) => log.warn('worktree folders not saved', e.message));
   }
 
   /**

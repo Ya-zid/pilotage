@@ -472,6 +472,8 @@ test('slugging', () => {
   assert.equal(slugify('客户 提醒'), '客户-提醒');
   assert.equal(slugify('Straße Søren Łódź'), 'strasse-soren-lodz');
   assert.equal(slugify('../مشروع/..'), 'مشروع');
+  assert.equal(slugify('हिन्दी परियोजना'), 'हिन्दी-परियोजना', 'combining marks stay inside words');
+  assert.equal(slugify('مَشْرُوع'), 'مَشْرُوع');
   assert.ok([...slugify('ж'.repeat(200))].length <= 60);
 });
 
@@ -609,4 +611,17 @@ test('handoff AI call goes through the engine queue as one manual job, with a fa
   assert.equal(calls.length, 1);
   const off = await queueAIHandoff({ store: { settings: { ai: { enabled: false } } }, ai: {} }, { instruction: 'i', input: 'z', callAI: fake });
   assert.equal(off.ok, false);
+});
+
+test('a project at the home folder is nobody\'s parent: suggestions never merge into it from other projects', async () => {
+  const { relatedPaths } = await import('../server/work/extract.js');
+  const bases = ['/home/u'];
+  assert.equal(relatedPaths('/home/u', '/home/u/acme/web', bases), false, 'home is a workspace base, not a parent project');
+  assert.equal(relatedPaths('/home/u/shop', '/home/u', bases), false);
+  assert.equal(relatedPaths('/home/u', '/home/u', bases), true, 'the same folder still matches');
+  assert.equal(relatedPaths('/home/u/acme', '/home/u/acme/web', bases), true, 'a real parent project still matches');
+  // reconcile and the tombstone check pass the bases along (liveInput gives the home folders).
+  const src = fs.readFileSync(new URL('../server/work/extract.js', import.meta.url), 'utf8');
+  assert.equal((src.match(/relatedPaths\([^)]*, bases\)/g) || []).length >= 2, true, 'both call sites use the bases');
+  assert.match(src, /bases: \[HOME, WIN_HOME\]/);
 });

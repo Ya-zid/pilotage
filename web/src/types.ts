@@ -322,6 +322,8 @@ export type NetInfo = {
   currentSsid?: string | null;
   trustedSsids?: string[];
   vpnCidrs?: string[];
+  /** 'forwarder' (WSL), 'bind' (Linux/macOS with PILOTAGE_LAN_BIND) or 'off'. */
+  mode?: 'forwarder' | 'bind' | 'off';
 };
 
 export type PortfolioProject = ProjectSummary & {

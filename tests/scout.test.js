@@ -637,3 +637,90 @@ test('engine: "Pause" is kept in the settings, so a restart does not resume AI w
   second.pausedByUser = false;
   assert.equal(store.settings.ai.paused, false);
 });
+
+// ---------------------------------------------------------------- AI queue (engine.enqueue / pump)
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function until(cond, ms = 3000) {
+  for (const t0 = Date.now(); !cond() && Date.now() - t0 < ms; ) await sleep(5);
+  return cond();
+}
+
+test('engine: "Summarize now" writes the project brief after the digests it is meant to include', async () => {
+  const fx = sessions();
+  const project = fakeProject(fx);
+  const engine = new AIEngine({ index: fakeIndex(fx), registry: fakeRegistry([project]), store: fakeStore(), live: { get: () => null } });
+  engine.state.blocks = {}; // nothing digested yet (earlier tests save data/ai.json)
+  const log = [];
+  engine.digestBlock = async ({ block }) => {
+    log.push(`start ${block.key}`);
+    await sleep(40);
+    log.push(`end ${block.key}`);
+    return { cost: 0 };
+  };
+  engine.briefProject = async () => (log.push('brief'), { cost: 0 });
+  const blocks = engine.pendingBlocks({ manual: true }).length;
+  assert.ok(blocks >= 2, 'the fixture has several blocks to digest');
+  assert.equal(engine.summarizeProject(project), blocks + 1);
+  assert.ok(await until(() => log.includes('brief')), 'the brief is written');
+  const before = log.slice(0, log.indexOf('brief'));
+  assert.equal(before.filter((e) => e.startsWith('end ')).length, blocks, `the brief starts once every digest is done: ${log.map((e) => e.split(' ')[0]).join(', ')}`);
+  await until(() => engine.running.size === 0);
+});
+
+test('engine: a manual job is not stuck behind automatic work the guard holds back', async () => {
+  const fx = sessions();
+  const project = fakeProject(fx);
+  const engine = new AIEngine({ index: fakeIndex(fx), registry: fakeRegistry([project]), store: fakeStore(), live: { get: () => null } });
+  engine.state.blocks = {};
+  engine.pausedByUser = true; // the guard holds automatic jobs back (as when usage is over the limit)
+  const ran = [];
+  engine.enqueue({ id: 'auto', kind: 'block', priority: 10, run: async () => (ran.push('auto'), { cost: 0 }) });
+  engine.enqueue({ id: 'manual', kind: 'block', priority: 5, manual: true, run: async () => (ran.push('manual'), { cost: 0 }) });
+  await until(() => ran.length > 0, 300);
+  assert.deepEqual(ran, ['manual'], 'the manual job runs; the automatic one at the head of the queue waits for the guard');
+  assert.deepEqual(engine.queue.map((j) => j.id), ['auto']);
+  // "Summarize now" while one of the project's blocks already waits as a guarded automatic job: that digest runs
+  // (as a manual job now), and the brief comes after it.
+  const [first] = engine.pendingBlocks({ manual: true });
+  engine.digestBlock = async ({ block }) => (await sleep(20), ran.push(`digest ${block.key}`), { cost: 0 });
+  engine.briefProject = async () => (ran.push('brief'), { cost: 0 });
+  engine.enqueue({ id: `block:${first.block.key}`, kind: 'block', priority: 10, run: () => engine.digestBlock(first) });
+  engine.summarizeProject(project);
+  assert.ok(await until(() => ran.includes('brief')), 'the brief is written');
+  assert.ok(ran.indexOf(`digest ${first.block.key}`) > 0 && ran.indexOf(`digest ${first.block.key}`) < ran.indexOf('brief'), `the waiting digest ran first: ${ran.join(', ')}`);
+  assert.deepEqual(engine.queue.map((j) => j.id), ['auto'], 'automatic work still waits for the guard');
+});
+
+test('engine: a CV entry is a manual queue job: within the concurrency limit, counted, one in flight per project', async () => {
+  const fx = sessions();
+  const projects = ['Acme', 'Beta', 'Gamma'].map((name) => fakeProject(fx, { id: name, name, path: path.join(HOME_DIR, name) }));
+  const engine = new AIEngine({ index: fakeIndex(fx), registry: fakeRegistry(projects), store: fakeStore(), live: { get: () => null } }); // concurrency 2
+  engine.state.callLog = [];
+  engine.state.stats = { calls: 0, cost: 0, errors: 0, lastError: null, lastRunAt: 0, byKind: {} };
+  let active = 0;
+  let peak = 0;
+  const calls = [];
+  engine.runCV = async (project, lang) => {
+    calls.push(project.name);
+    peak = Math.max(peak, ++active);
+    await sleep(60);
+    active--;
+    if (project.name === 'Gamma') throw new Error('the model returned nothing');
+    engine.state.cv[project.path] = { lang, at: Date.now(), model: 'sonnet', entry: { title: project.name } };
+    return { ok: true, cost: 0.01 };
+  };
+  const [acme, beta, gamma] = projects;
+  // A double tap or a retrying client: three requests for Acme at once, plus one for each other project.
+  const out = await Promise.allSettled([engine.writeCV(acme), engine.writeCV(acme), engine.writeCV(acme), engine.writeCV(beta), engine.writeCV(gamma)]);
+  assert.deepEqual([...calls].sort(), ['Acme', 'Beta', 'Gamma'], 'one call per project');
+  assert.ok(peak <= 2, `at most "concurrency" calls at once (saw ${peak})`);
+  assert.equal(engine.state.callLog.length, 3, 'each call counts toward the call caps');
+  assert.equal(engine.state.stats.byKind.cv, 2, 'each entry written is counted once');
+  for (const r of out.slice(0, 3)) assert.equal(r.value?.entry?.title, 'Acme', 'every Acme request gets the entry');
+  assert.equal(out[3].value?.entry?.title, 'Beta');
+  assert.equal(out[4].status, 'rejected');
+  assert.match(out[4].reason.message, /returned nothing/);
+  await engine.writeCV(acme);
+  assert.equal(calls.length, 4, 'once done, a new request writes it again');
+});

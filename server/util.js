@@ -312,6 +312,20 @@ export function statSafe(p) {
   }
 }
 
+/**
+ * Folder walks (project scan, Gemini's folder lookup) skip folders with hundreds of entries: usually generated (e.g.
+ * 900 concept dirs). Not a folder of repos, though (~/code with 400+ projects): walk it when one of its first `sample`
+ * sub-folders (readdir order, effectively random) holds one of `markers`.
+ */
+export async function holdsProjects(dir, subdirs, markers, sample = 50) {
+  for (const name of subdirs.slice(0, sample)) {
+    try {
+      if ((await fsp.readdir(path.join(dir, name))).some((n) => markers.includes(n))) return true;
+    } catch {}
+  }
+  return false;
+}
+
 /** Is `child` equal to or inside `parent` (both absolute, normalized)? */
 export function isInside(child, parent) {
   if (!child || !parent) return false;

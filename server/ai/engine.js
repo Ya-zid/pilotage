@@ -332,6 +332,7 @@ export class AIEngine extends EventEmitter {
     this.queue = [];
     this.queued = new Set();
     this.running = new Map();
+    this.cvWaits = new Map(); // cv job id -> the promise its requests wait on (writeCV)
     this.blockCache = new Map();
     this.guardReason = null;
     this._save = debounce(() => {
@@ -880,12 +881,40 @@ export class AIEngine extends EventEmitter {
       model: this.settings.cvModel,
       effort: 'medium',
     });
-    if (!r.ok) throw new Error(r.error);
+    if (!r.ok) throw aiError(r, classifyFailure(r));
     this.state.cv[project.path] = { lang, at: Date.now(), model: r.model, entry: r.data };
-    this.recordStats('cv', r);
-    this._save();
     this.emit('changed', { kind: 'cv', path: project.path });
-    return this.state.cv[project.path];
+    return r; // a queue job (writeCV): pump() records the stats and saves
+  }
+
+  /**
+   * POST /api/ai/cv: the CV entry as a manual queue job (within the concurrency limit, counted toward the call caps),
+   * resolved with the stored entry. One in flight per project: a double tap or a retry gets the same answer.
+   */
+  writeCV(project, lang = 'en') {
+    const id = `cv:${project.path}`;
+    if (this.cvWaits.has(id)) return this.cvWaits.get(id);
+    const done = new Promise((resolve, reject) => {
+      const queued = this.enqueue({
+        id,
+        kind: 'cv',
+        priority: 55,
+        manual: true,
+        label: project.name,
+        projectPath: project.path,
+        run: () =>
+          this.runCV(project, lang).then(
+            (r) => (resolve(this.state.cv[project.path]), r),
+            (e) => {
+              reject(e);
+              throw e;
+            },
+          ),
+      });
+      if (!queued) reject(new Error(process.env.PILOTAGE_NO_AI === '1' ? 'AI disabled (PILOTAGE_NO_AI)' : 'Could not queue the AI call'));
+    }).finally(() => this.cvWaits.delete(id));
+    this.cvWaits.set(id, done);
+    return done;
   }
 
   /** Pilotage's own call budget (the usage files can't see headless calls). */
@@ -917,12 +946,37 @@ export class AIEngine extends EventEmitter {
 
   enqueue(job) {
     if (process.env.PILOTAGE_NO_AI === '1') return false; // tests / experiments: never call a model
-    if (this.queued.has(job.id) || this.running.has(job.id)) return false;
+    if (this.running.has(job.id)) return false;
+    if (this.queued.has(job.id)) {
+      // Asked for by hand while it waits as an automatic job: it becomes the manual job (past the guard, sooner).
+      const i = this.queue.findIndex((j) => j.id === job.id);
+      if (!job.manual || i < 0 || this.queue[i].manual) return false;
+      this.queue[i] = { ...this.queue[i], ...job, priority: Math.max(this.queue[i].priority || 0, job.priority || 0) };
+      this.queue.sort((a, b) => (b.priority || 0) - (a.priority || 0));
+      this.pump();
+      return true;
+    }
     this.queued.add(job.id);
     this.queue.push(job);
     this.queue.sort((a, b) => (b.priority || 0) - (a.priority || 0));
     this.pump();
     return true;
+  }
+
+  /**
+   * "Summarize now" on a project: its pending blocks (old ones too), then its brief. The brief waits for those digests
+   * (`after`), so it includes the work just summarized instead of running beside it. Returns how many jobs it asked for.
+   */
+  summarizeProject(project) {
+    const ids = [];
+    for (const pb of this.pendingBlocks({ manual: true }).filter((x) => x.project.path === project.path)) {
+      const id = `block:${pb.block.key}`;
+      this.enqueue({ id, kind: 'block', priority: 50, manual: true, run: () => this.digestBlock(pb), label: project.name, projectPath: project.path });
+      ids.push(id);
+    }
+    const id = ids.length ? `brief-after:${project.path}` : `brief:${project.path}`;
+    this.enqueue({ id, kind: 'brief', priority: 49, manual: true, after: ids, run: () => this.briefProject({ project }), label: project.name, projectPath: project.path });
+    return ids.length + 1;
   }
 
   /** Periodic scheduling of automatic work. */
@@ -990,8 +1044,12 @@ export class AIEngine extends EventEmitter {
     while (this.running.size < conc && this.queue.length) {
       const g = this.guard();
       this.guardReason = g.ok ? null : g.reason;
-      if (!g.ok && !this.queue[0].manual) return;
-      const job = this.queue.shift();
+      // The first job that may start: an automatic job the guard holds back doesn't block a manual one behind it, and
+      // a job with `after` waits while those jobs are running or still queued to run.
+      const willRun = (id) => this.running.has(id) || this.queue.some((j) => j.id === id && (g.ok || j.manual));
+      const i = this.queue.findIndex((j) => (g.ok || j.manual) && !(j.after || []).some(willRun));
+      if (i < 0) return;
+      const [job] = this.queue.splice(i, 1);
       this.queued.delete(job.id);
       this.running.set(job.id, { ...job, startedAt: Date.now() });
       this.emit('changed', { kind: 'queue' });
@@ -1051,7 +1109,7 @@ export class AIEngine extends EventEmitter {
 function friendlyError(msg = '') {
   if (/structured_output|no structured output/i.test(msg)) return 'The model returned an invalid summary; it will be retried.';
   if (/please run \/login|not logged in/i.test(msg))
-    return process.env.ANTHROPIC_API_KEY && process.env.PILOTAGE_USE_ANTHROPIC_API_KEY !== '1'
+    return (process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN) && process.env.PILOTAGE_USE_ANTHROPIC_API_KEY !== '1' && !process.env.ANTHROPIC_BASE_URL
       ? 'Claude is logged out on this PC (run claude, then /login). To bill ANTHROPIC_API_KEY instead, start Pilotage with PILOTAGE_USE_ANTHROPIC_API_KEY=1'
       : 'Claude is logged out on this PC (run claude in a terminal, then /login)';
   if (/usage limit|limit reached|rate.?limit|429/i.test(msg)) return 'Claude usage limit reached; summaries resume automatically later.';

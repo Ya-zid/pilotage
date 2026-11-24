@@ -108,7 +108,8 @@ Background loops in `start()`: session scan every 8 s, live state every 5 s whil
   Jobs you start by hand ("Summarize now") skip the guard; the non-Claude daily cap still applies in `callAI()`.
 - Results are cached in `data/ai.json` with a hash of their input, and redone only when the input changes.
 - **Providers** (`ai/providers.js`, `callAI()`): `claude -p` (`ai/runner.js`: no tools, no MCP, no slash commands,
-  no session persistence, run in `data/ai-sandbox`), `codex exec` (read-only sandbox), or an OpenAI-compatible API.
+  no session persistence, run in a private temp folder with no CLAUDE.md above it: `config.aiWorkDir()`), `codex exec`
+  (read-only sandbox, same folder), or an OpenAI-compatible API.
 - Task suggestions (`server/work/extract.js`) make no AI calls: they come from the digests and summaries.
 
 ## Phone path

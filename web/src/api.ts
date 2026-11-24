@@ -106,6 +106,8 @@ export const useAI = () => useQuery({ queryKey: ['ai'], queryFn: () => api<AISta
 export const useSettings = () => useQuery({ queryKey: ['settings'], queryFn: () => api<{ settings: Settings; workspaces: Record<string, { name?: string }> }>('/api/settings') });
 export const useDevices = () => useQuery({ queryKey: ['devices'], queryFn: () => api<{ devices: Device[]; current: string }>('/api/devices') });
 export const useNet = () => useQuery({ queryKey: ['net'], queryFn: () => api<NetInfo>('/api/net'), refetchInterval: 30_000 });
+/** The same data without polling (each /api/net runs Windows tools on WSL): for Home's one-time phone callout. */
+export const useNetOnce = () => useQuery({ queryKey: ['net'], queryFn: () => api<NetInfo>('/api/net'), staleTime: 5 * 60_000 });
 export const usePortfolio = () =>
   useQuery({ queryKey: ['portfolio'], queryFn: () => api<{ projects: PortfolioProject[]; settings: { lang: string; header: string } }>('/api/portfolio').then((r) => (registerWorkspaces(r.projects.map((p) => p.workspace)), r)) });
 export const useTimeline = () =>
@@ -139,7 +141,7 @@ export function usePatchProject(id: string) {
 // session/Live/Timeline rows show project names), so a change refreshes every list that displays it.
 // Only queries on screen refetch; the rest are just marked stale.
 const KIND_TO_KEYS: Record<string, string[]> = {
-  sessions: ['overview', 'projects', 'project', 'sessions', 'session', 'turns', 'live', 'timeline', 'portfolio', 'work'],
+  sessions: ['overview', 'projects', 'project', 'sessions', 'session', 'turns', 'turn', 'live', 'timeline', 'portfolio', 'work'],
   live: ['overview', 'live', 'sessions', 'session', 'projects', 'project'],
   projects: ['overview', 'projects', 'project', 'portfolio', 'work', 'spinoffs', 'sessions', 'session', 'live', 'timeline', 'day'],
   ai: ['ai', 'overview', 'scout'],
@@ -150,7 +152,7 @@ const KIND_TO_KEYS: Record<string, string[]> = {
   index: ['overview', 'bootstrap'],
   work: ['work', 'spinoffs', 'overview', 'project'],
   providers: ['providers', 'harnesses'],
-  settings: ['settings', 'bootstrap', 'providers', 'ai'],
+  settings: ['settings', 'bootstrap', 'providers', 'harnesses', 'ai'],
   overview: ['overview'],
   scout: ['scout', 'overview', 'ideas', 'project'],
 };
