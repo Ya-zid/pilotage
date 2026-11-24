@@ -282,6 +282,9 @@ async function launchTerminal(rec, { prompt, permissionMode }) {
     `cd -- ${shq(rec.cwd)} || { echo "Pilotage: folder not found"; exec bash -l; }`,
     `printf '\\033]0;%s\\007' ${shq(rec.name)}`,
     `CLAUDE=(${CLAUDE_CMD.map(shq).join(' ')})`, // [node] claude: an npm install runs with Pilotage's node
+    // ...and node stays findable (last, so the user's own node wins) for claude's children: MCP servers run with npx,
+    // node hooks, wrapper shims. Launch tabs are non-interactive login shells, where nvm usually isn't loaded.
+    `export PATH="$PATH":${shq(path.dirname(process.execPath))}`,
     `ARGS=(${args.map(shq).join(' ')})`,
     prompt
       ? `PROMPT="$(cat ${shq(promptFile)})"; rm -f ${shq(promptFile)}; "\${CLAUDE[@]}" "\${ARGS[@]}" -- "$PROMPT"`
@@ -304,7 +307,7 @@ async function launchBackground(rec, { prompt, permissionMode }) {
   }
   if (prompt) args.push('--', prompt);
   // Run through a login shell so PATH / nvm match the user's normal terminals.
-  const cmd = [...CLAUDE_CMD, ...args].map(shq).join(' ');
+  const cmd = `export PATH="$PATH":${shq(path.dirname(process.execPath))}; ${[...CLAUDE_CMD, ...args].map(shq).join(' ')}`;
   const r = await run('bash', ['-lc', cmd], { cwd: rec.cwd, timeout: 60000 });
   const out = `${r.stdout}\n${r.stderr}`;
   const m = /backgrounded\s*·\s*([0-9a-f]{6,})/i.exec(out.replace(/\x1b\[[0-9;]*m/g, ''));

@@ -12,7 +12,10 @@ const SAFE = ['--no-optional-locks', '-c', 'core.fsmonitor=false', '-c', 'core.u
 // No network or helper programs either: GIT_ALLOW_PROTOCOL='' allows no transport at all (it overrides a repo's own
 // protocol.<name>.allow, unlike -c protocol.allow=never), so a partial clone can't lazily "fetch" through an ext::
 // command, core.sshCommand or a credential helper; GIT_NO_LAZY_FETCH (git 2.45+) says the same thing directly.
-const GIT_ENV = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0', GIT_PAGER: 'cat', GIT_EXTERNAL_DIFF: '', GIT_ALLOW_PROTOCOL: '', GIT_NO_LAZY_FETCH: '1' };
+// Filters and helpers run with the repo as their working folder: a relative PATH entry (".", "", "node_modules/.bin")
+// would find a program the repo ships under an allow-listed name (git-lfs, git-crypt). Absolute entries only.
+export const gitEnvPath = (p = '') => String(p).split(':').filter((d) => d.startsWith('/')).join(':');
+const GIT_ENV = { ...process.env, PATH: gitEnvPath(process.env.PATH), GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0', GIT_PAGER: 'cat', GIT_EXTERNAL_DIFF: '', GIT_ALLOW_PROTOCOL: '', GIT_NO_LAZY_FETCH: '1' };
 const G = (dir, args, timeout = 10000) => limit(() => run('git', [...SAFE, '-C', dir, ...args], { timeout, env: GIT_ENV }));
 
 /** If dir is a git worktree, return {mainRoot, gitdir}; if a main repo, {mainRoot: dir}; else null. */

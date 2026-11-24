@@ -46,13 +46,16 @@ export async function runChecks({ onPath = null, autostart = null, fromNpx = fal
 
   ok(`Node.js ${process.versions.node}, Pilotage ${VERSION} on ${OS_NAME === 'wsl' ? 'WSL2' : OS_NAME === 'darwin' ? 'macOS' : OS_NAME}`);
 
-  // Data folder
-  try {
-    fs.mkdirSync(DATA, { recursive: true });
-    fs.accessSync(DATA, fs.constants.W_OK);
-    ok(`Data folder ${DATA}`);
-  } catch {
-    fail(`Data folder ${DATA} is not writable`, 'Fix its permissions, or set PILOTAGE_DATA to a folder you own.');
+  // Data folder (read-only check: the nearest folder that exists must be writable; nothing is created)
+  {
+    let probe = DATA;
+    while (!fs.existsSync(probe) && path.dirname(probe) !== probe) probe = path.dirname(probe);
+    try {
+      fs.accessSync(probe, fs.constants.W_OK);
+      ok(probe === DATA ? `Data folder ${DATA}` : `Data folder ${DATA} (created at the first start)`);
+    } catch {
+      fail(`Data folder ${DATA} is not writable`, 'Fix its permissions, or set PILOTAGE_DATA to a folder you own.');
+    }
   }
 
   // The server

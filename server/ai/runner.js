@@ -1,6 +1,7 @@
 // Headless `claude -p` calls with structured output. No tools, no MCP, no user hooks,
 // no session persistence: a pure text-in / JSON-out call on the user's subscription.
 import fs from 'node:fs';
+import path from 'node:path';
 import { CLAUDE_CMD, paths } from '../config.js';
 import { runWithInput, clip, log } from '../util.js';
 
@@ -22,6 +23,9 @@ const BASE_ARGS = [
  */
 export function claudeEnv(parent) {
   const env = { ...parent };
+  // Node last on PATH, for claude's own children (wrapper shims call `node` from PATH; the autostart has no nvm).
+  const nodeDir = path.dirname(process.execPath);
+  if (!String(env.PATH || '').split(':').includes(nodeDir)) env.PATH = env.PATH ? `${env.PATH}:${nodeDir}` : nodeDir;
   const keepKey = parent.PILOTAGE_USE_ANTHROPIC_API_KEY === '1';
   for (const k of Object.keys(env)) if (k.startsWith('PILOTAGE_')) delete env[k];
   if (!keepKey) {

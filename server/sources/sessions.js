@@ -23,6 +23,13 @@ const clip = (s, n) => rawClip(redact(s), n);
 const CHUNK = 8 * 1024 * 1024;
 const MAX_LINE = 96 * 1024 * 1024;
 const MAX_PARSE = 6 * 1024 * 1024;
+/** Base64 payloads (pasted screenshots) blanked, so a prompt carrying several images still parses under MAX_PARSE. */
+const IMAGE_DATA = /"data":"[A-Za-z0-9+/=]{1024,}"/g;
+function parsable(buf) {
+  if (buf.length <= MAX_PARSE) return buf.toString('utf8');
+  const s = buf.toString('utf8').replace(IMAGE_DATA, '"data":""');
+  return s.length <= MAX_PARSE ? s : null;
+}
 const META_TYPES = new Set(['ai-title', 'custom-title', 'last-prompt', 'summary', 'agent-name', 'pr-link', 'session-owner']);
 // Appends to a running session wait this long before its turns file and the index are rewritten (see flush()).
 const FLUSH_MS = 45000;
@@ -231,10 +238,13 @@ class TranscriptParser {
       if (buf.length < 1_500_000 && buf.includes('/pull/')) addPrLinks(m, buf.toString('utf8'));
       return;
     }
-    if (buf.length > MAX_PARSE) return;
+    // Over MAX_PARSE: usually a prompt with screenshots. Skipping it dropped the prompt and moved its reply onto the
+    // previous one, so parse it with the image data blanked.
+    const text = parsable(buf);
+    if (text == null) return;
     let o;
     try {
-      o = JSON.parse(buf.toString('utf8'));
+      o = JSON.parse(text);
     } catch {
       return;
     }
@@ -635,14 +645,20 @@ export class SessionIndex extends EventEmitter {
     return out;
   }
 
+  /**
+   * Every transcript file, plus `files.unreadable`: folders that exist but couldn't be read this time (an EIO on
+   * /mnt/c right after Windows sleeps, a drive not mounted yet). Their sessions are not missing, only unseen.
+   */
   async listFiles() {
     const files = [];
+    files.unreadable = new Set();
     for (const src of this.allSources()) {
       const projDir = path.join(src.dir, 'projects');
       let dirs = [];
       try {
         dirs = await fsp.readdir(projDir, { withFileTypes: true });
-      } catch {
+      } catch (e) {
+        if (e?.code !== 'ENOENT') files.unreadable.add(projDir);
         continue;
       }
       for (const d of dirs) {
@@ -651,7 +667,8 @@ export class SessionIndex extends EventEmitter {
         let ents = [];
         try {
           ents = await fsp.readdir(dp, { withFileTypes: true });
-        } catch {
+        } catch (e) {
+          if (e?.code !== 'ENOENT') files.unreadable.add(dp);
           continue;
         }
         for (const e of ents) {
@@ -680,9 +697,12 @@ export class SessionIndex extends EventEmitter {
       const histChanged = await this.readHistory();
       const files = await this.listFiles();
       const seen = new Set(files.map((f) => f.id));
-      // Transcripts that disappeared (Claude Code cleanup) fall back to history.
+      // Transcripts that disappeared (Claude Code cleanup) fall back to history. Not when their folder just couldn't be
+      // read: dropping them would empty the UI, save an index without them and re-parse every file from byte 0.
+      const unreadable = [...(files.unreadable || [])];
+      const unseenOnly = (file) => unreadable.some((d) => isInside(file, d));
       for (const [id, m] of this.meta) {
-        if (!seen.has(id) && m.file && (m.harness || 'claude') === 'claude') {
+        if (!seen.has(id) && m.file && (m.harness || 'claude') === 'claude' && !unseenOnly(m.file)) {
           this.meta.delete(id);
           this.turnCache.delete(id);
           this.pendingTurns.delete(id);
@@ -864,7 +884,7 @@ export class SessionIndex extends EventEmitter {
           if (nl === -1) break;
           const line = data.subarray(start, nl);
           start = nl + 1;
-          if (line.length > MAX_PARSE) continue;
+          if (line.length > MAX_PARSE && parsable(line) == null) continue; // screenshots alone are fine (blanked)
           const head = line.toString('latin1', 0, Math.min(700, line.length));
           if (head.includes('"isSidechain":true')) continue;
           const isToolResult = head.includes('"tool_use_id"') || head.includes('"type":"tool_result"');
@@ -889,7 +909,7 @@ export class SessionIndex extends EventEmitter {
           if (ht !== 'user' && ht !== 'assistant') continue;
           let o;
           try {
-            o = JSON.parse(line.toString('utf8'));
+            o = JSON.parse(parsable(line) ?? '');
           } catch {
             continue;
           }

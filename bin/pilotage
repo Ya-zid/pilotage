@@ -145,7 +145,7 @@ cmd_doctor() {
   command -v pilotage >/dev/null 2>&1 && onpath=1
   if [ "$IS_WSL" = 1 ]; then auto=0; [ -f "$STARTUP_VBS" ] && auto=1
   elif [ "$IS_MAC" = 1 ]; then auto=0; [ -f "$LA_PLIST" ] && auto=1
-  else auto=0; [ -f "$SYSTEMD_UNIT" ] && auto=1; fi
+  else auto=0; systemd_enabled && auto=1; fi
   ( cd "$ROOT" && PILOTAGE_DOCTOR_ON_PATH="$onpath" PILOTAGE_DOCTOR_AUTOSTART="$auto" PILOTAGE_DOCTOR_NPX="$FROM_NPX" PILOTAGE_WIN_SYSTEM32="$SYS32" "$NODE" "$ROOT/server/doctor.js" )
 }
 
@@ -179,7 +179,7 @@ cmd_status() {
     if [ "$IS_MAC" = 1 ]; then
       [ -f "$LA_PLIST" ] && say "${c_green}●${c_off} Starts automatically at login" || say "${c_dim}● Autostart not installed (pilotage install)${c_off}"
     else
-      [ -f "$SYSTEMD_UNIT" ] && say "${c_green}●${c_off} Starts automatically at login (systemd user service)" || say "${c_dim}● Autostart not installed (pilotage install)${c_off}"
+      systemd_enabled && say "${c_green}●${c_off} Starts automatically at login (systemd user service)" || say "${c_dim}● Autostart not installed (pilotage install)${c_off}"
     fi
     say "${c_dim}● Phone access: see docs/PHONE.md (PILOTAGE_LAN_BIND)${c_off}"
     return 0
@@ -418,6 +418,18 @@ systemd_quote() {
   printf '"%s"' "$s"
 }
 systemd_user_ok() { command -v "$SYSTEMCTL" >/dev/null 2>&1 && "$SYSTEMCTL" --user show-environment >/dev/null 2>&1; }
+systemd_enabled() { [ -f "$SYSTEMD_UNIT" ] && "$SYSTEMCTL" --user is-enabled pilotage.service >/dev/null 2>&1; }
+# Environment= lines: the same settings the macOS LaunchAgent records (node, data folder, every PILOTAGE_* variable),
+# so a login start uses the data folder, port and phone bind this install was set up with.
+systemd_env() {
+  local name
+  printf 'Environment=%s\n' "$(systemd_quote "PATH=$(dirname "$NODE"):$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin")"
+  printf 'Environment=%s\n' "$(systemd_quote "PILOTAGE_NODE=$NODE")" "$(systemd_quote "PILOTAGE_DATA=$DATA")"
+  for name in $(env | sed -n 's/^\(PILOTAGE_[A-Z0-9_]*\)=.*/\1/p' | sort -u); do
+    case "$name" in PILOTAGE_NODE | PILOTAGE_DATA | PILOTAGE_SYSTEMCTL) continue ;; esac
+    printf 'Environment=%s\n' "$(systemd_quote "$name=${!name}")"
+  done
+}
 
 # Linux: start the supervisor (`pilotage run`) at login with a systemd user service.
 install_systemd_unit() {
@@ -435,14 +447,16 @@ After=default.target
 [Service]
 Type=simple
 ExecStart=$(systemd_quote "$ROOT/bin/pilotage") run
+$(systemd_env)
 Restart=on-failure
 RestartSec=10
 
 [Install]
 WantedBy=default.target
 UNIT
-  if "$SYSTEMCTL" --user daemon-reload >/dev/null 2>&1 && "$SYSTEMCTL" --user enable pilotage.service >/dev/null 2>&1; then
+  if "$SYSTEMCTL" --user daemon-reload >/dev/null 2>&1 && "$SYSTEMCTL" --user enable --now pilotage.service >/dev/null 2>&1; then
     say "• Autostart: starts at login (systemd user service pilotage.service)"
+    say "  ${c_dim}It runs while you're logged in; for a machine you only reach over SSH: loginctl enable-linger \$USER${c_off}"
   else
     say "• Wrote $SYSTEMD_UNIT, but could not enable it: run systemctl --user enable pilotage.service"
   fi
@@ -508,5 +522,5 @@ case "${1:-open}" in
   install) cmd_install ;;
   uninstall) shift; cmd_uninstall "${1:-}" ;;
   -h|--help|help) sed -n '2,9p' "$ROOT/bin/pilotage" | sed 's/^# \{0,1\}//' ;;
-  *) say "Unknown command: $1"; sed -n '2,8p' "$ROOT/bin/pilotage" | sed 's/^# \{0,1\}//'; exit 1 ;;
+  *) say "Unknown command: $1"; sed -n '2,9p' "$ROOT/bin/pilotage" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac

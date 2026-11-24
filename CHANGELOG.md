@@ -7,6 +7,28 @@ minor versions.
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-24
+
+Fixes from a second round of independent review of 0.4.0, and two indexing fixes.
+
+### Security
+
+- Pilotage's git calls only search absolute PATH entries, so a program shipped inside an untrusted repo can't be
+  picked up under an allowed name (git-lfs, git-crypt) through ".", "" or "node_modules/.bin" in PATH.
+- Redaction: JWTs right after a URL escape (`id_token%3DeyJ...`) and `curl -u` anywhere on a long curl line are
+  masked; separators around secret keys are bounded (no slow lines).
+
+### Fixed
+
+- Sessions Pilotage starts keep Node.js at the end of PATH again, for MCP servers run with npx, node hooks and
+  wrapper shims (0.4.0 removed it while running an npm-installed claude with Pilotage's node).
+- A prompt with several screenshots (a transcript line over 6 MB) is indexed, and each reply stays on its own prompt.
+- A transcript folder that can't be read for a moment (WSL right after Windows sleeps) keeps its sessions instead of
+  dropping them and re-reading everything.
+- Linux autostart records the data folder, port and other `PILOTAGE_*` settings, starts right away, and `status` /
+  `doctor` check that it is enabled.
+- `pilotage doctor` no longer creates a missing data folder.
+
 ## [0.4.0] - 2026-11-24
 
 A security and first-run release: an overnight audit of the whole codebase, with every fix tested and reviewed.
@@ -153,7 +175,8 @@ First public release.
 - Security: a 127.0.0.1-only server, paired devices, one-time codes, a CSRF header, a Host allow-list and redaction
   of common secret formats.
 
-[Unreleased]: https://github.com/Ya-zid/pilotage/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/Ya-zid/pilotage/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/Ya-zid/pilotage/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Ya-zid/pilotage/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Ya-zid/pilotage/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Ya-zid/pilotage/compare/v0.1.0...v0.2.0
