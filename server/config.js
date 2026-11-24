@@ -150,13 +150,17 @@ export const HOME_SKIP = new Set(process.platform === 'darwin' ? ['Library', 'Ap
 export const INTERNAL_PATHS = [path.join(ROOT, '.sandbox'), path.join(DATA, 'ai-sandbox')];
 
 const AI_DIR_PREFIX = 'pilotage-ai-';
+// Where Pilotage's private AI folders can be: the temp folder of this process and of earlier runs, which may have had
+// another TMPDIR (a login item vs a terminal; macOS falls back to /tmp, really /private/tmp), in both spellings.
 const TMP_ROOTS = (() => {
-  const t = os.tmpdir();
-  try {
-    return [...new Set([t, fs.realpathSync(t)])];
-  } catch {
-    return [t];
+  const roots = new Set();
+  for (const t of [os.tmpdir(), '/tmp', '/var/tmp', '/private/tmp']) {
+    roots.add(t);
+    try {
+      roots.add(fs.realpathSync(t));
+    } catch {}
   }
+  return [...roots];
 })();
 let aiDir = null;
 
