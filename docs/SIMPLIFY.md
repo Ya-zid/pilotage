@@ -61,13 +61,13 @@ Status colours: Needs you = amber, Working = accent (animated dot), Open/idle = 
 
 Desktop sidebar, primary: **Home · Sessions · Projects · Tasks**. Then **Recent projects**: the 5 most recently active
 projects (running first), each with its glyph + running dot; click opens the project, ▶ on hover = New session there;
-an "All projects" link. Secondary (bottom of sidebar, small): **Ideas** (new possible projects count), History,
+an "All projects" link. Secondary (bottom of sidebar, small): **Ideas** (new possible projects count), **Map**, History,
 Portfolio & CV, Settings, How Pilotage works. Usage meters stay in the sidebar footer, labelled "5-hour limit" /
 "Weekly limit".
 Badges: Sessions = Needs-you count (amber) else Working count; Tasks = To do + Doing (never Suggested).
 
 Phone tab bar: **Home · Sessions · ＋ · Projects · More**. ＋ is a capture sheet (New session · Add task · Capture idea),
-using the current project when on a project/session page. More = Tasks, Ideas, History, Portfolio & CV, Settings,
+using the current project when on a project/session page. More = Tasks, Ideas, Map, History, Portfolio & CV, Settings,
 How Pilotage works, usage; the More tab shows a count pip when tasks are planned for today or in Doing.
 
 Routes: `/live` → redirect `/sessions`; `/timeline` → redirect `/history`. `/guide` = How Pilotage works.
@@ -173,12 +173,13 @@ possible projects; nothing is sent anywhere else), "Phone" (Running → Open in 
 - Work items gain `plannedFor: 'YYYY-MM-DD'|null`, `snoozeUntil: ms|null`, `dismissReason: string|null`,
   `closedBy` may be `'expired'`.
   - `POST /api/work/:id/today {on: boolean}`.
-  - `POST /api/work/:id/dismiss {reason: 'not-a-task'|'done'|'duplicate'|'snooze'}` (snooze = 7 d, stays Suggested
-    but hidden until then; others → dropped with dismissReason).
-  - `POST /api/work/dismiss-old {days: 14}` → drops untouched suggestions older than N days, returns `{ids}`;
-    `POST /api/work/restore {ids}` undoes it.
-  - `POST /api/plan/focus/:index {action: 'accept'|'dismiss'}` → accept returns the task (existing match or new
-    To do task flagged today); dismiss hides the proposal for today.
+  - `POST /api/work/:id/dismiss {reason: 'not-a-task'|'done'|'duplicate'|'snooze'|'unsnooze'}` (snooze = 7 d, stays
+    Suggested but hidden until then; unsnooze ends it; others → dropped (done for 'done') with dismissReason).
+  - `POST /api/work/dismiss-old {days?: number /* default 7 */}` → drops untouched suggestions older than N days
+    (closedBy 'user', dismissReason 'old'), returns `{ids}`; `POST /api/work/restore {ids}` undoes it
+    (`restoredAt`).
+  - `POST /api/plan/focus/:key {action: 'accept'|'dismiss'}` (`key`: the 12-hex key of the focus item) → accept
+    returns the task (existing match or new To do task flagged today); dismiss hides the proposal for today.
 - Scout: see docs/API-SCOUT.md (`GET /api/scout`, `POST /api/scout/run`, `PATCH /api/scout/:id`,
   `POST /api/scout/:id/save`, `scoutId` on `POST /api/spinoff` and `POST /api/projects/new`, SSE kind `scout`).
 - SSE kinds: `work` (tasks incl. plan flags), `scout`, `overview` as before.

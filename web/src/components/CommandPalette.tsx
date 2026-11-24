@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Briefcase, CircleHelp, CornerDownLeft, FolderKanban, History, Inbox, Lightbulb, ListChecks, ListPlus, MessagesSquare, PenLine, Plus, Search, Settings, Home, Sparkles } from 'lucide-react';
+import { Briefcase, CircleHelp, CornerDownLeft, FolderKanban, History, Inbox, Lightbulb, ListChecks, ListPlus, MessageCircle, MessagesSquare, Network, PenLine, Plus, Search, Settings, Home, Sparkles } from 'lucide-react';
 import { useProjects, useSearch } from '../api';
 import { useWork } from '../api-extra';
 import { TASK_STATUS } from './tasks/model';
@@ -53,6 +53,7 @@ export function CommandPalette() {
       { key: 'projects', icon: <FolderKanban size={16} />, title: 'Projects', also: 'repos folders workspaces', group: 'Go to', run: () => go('/projects') },
       { key: 'ideas', icon: <Lightbulb size={16} />, title: 'Ideas', group: 'Go to', run: () => go('/ideas') },
       { key: 'possible', icon: <Sparkles size={16} />, title: 'Possible projects', also: 'scout spin-off spinoff candidates', group: 'Go to', run: () => go('/ideas') },
+      { key: 'map', icon: <Network size={16} />, title: 'Map', also: 'mind map graph links connections obsidian', group: 'Go to', run: () => go('/map') },
       { key: 'history', icon: <History size={16} />, title: 'History', also: 'timeline activity heatmap streak', group: 'Go to', run: () => go('/history') },
       { key: 'portfolio', icon: <Briefcase size={16} />, title: 'Portfolio & CV', group: 'Go to', run: () => go('/portfolio') },
       { key: 'settings', icon: <Settings size={16} />, title: 'Settings', also: 'phone pairing devices ai usage limits', group: 'Go to', run: () => go('/settings') },
@@ -70,6 +71,8 @@ export function CommandPalette() {
         out.push({ key: `t${t.id}`, group: 'Tasks', icon: <StatusIcon status={TASK_STATUS[t.status]?.glyph || 'todo'} size={15} />, title: t.title, sub: `${t.projectName} · ${TASK_STATUS[t.status]?.label || t.status}`, right: ago(t.sourceAt || t.updatedAt), run: () => go(`/tasks?open=${encodeURIComponent(t.id)}`) });
       for (const s of results.sessions)
         out.push({ key: `s${s.id}`, group: 'Sessions', icon: s.live ? <StatusIcon status={liveState(s) || 'live'} title={liveLabel(s)} /> : <MessagesSquare size={15} />, title: s.title, sub: plainText(s.match) || `${s.projectName || ''} · ${plainText(s.lastPrompt)}`, right: ago(s.lastAt), run: () => go(`/sessions/${s.id}`) });
+      for (const c of results.chats || [])
+        out.push({ key: `c${c.uuid}`, group: 'claude.ai chats', icon: <MessageCircle size={15} />, title: c.name, sub: [c.projects.map((p) => p.name).join(', '), 'opens in claude.ai'].filter(Boolean).join(' · '), right: ago(c.updatedAt), run: () => (closePalette(), window.open(c.url, '_blank', 'noopener,noreferrer')) });
       for (const i of results.ideas) out.push({ key: `i${i.id}`, group: 'Ideas', icon: <Lightbulb size={15} />, title: i.text.slice(0, 90), run: () => go('/ideas') });
     }
     return out;

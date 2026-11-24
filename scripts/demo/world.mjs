@@ -728,4 +728,12 @@ export const DEVICES = [
 ];
 
 /** Usage meters in the sidebar footer. */
+// claude.ai chats (Settings → Sources → import an export): shown on the Map and in Sessions. Fictional, like the rest.
+export const CHATS = [
+  { uuid: '0d2f6a3e-1c4b-4e8a-9f10-5a1b2c3d4e01', name: 'Stripe Tax vs. hard-coded VAT for a coffee shop', day: -3, messages: 14, first: 'For a small EU coffee shop on Stripe, should VAT come from Stripe Tax or a table in the app?', last: 'OK, Stripe Tax it is. How do I test it on staging?', project: 'clients/northwind-shop' },
+  { uuid: '0d2f6a3e-1c4b-4e8a-9f10-5a1b2c3d4e02', name: 'Invoice numbering rules (France, Germany)', day: -6, messages: 9, first: 'What are the legal rules for invoice numbers in France and Germany? Gaps allowed?', last: 'Can a credit note use the same sequence?', project: 'saas/invoicely' },
+  { uuid: '0d2f6a3e-1c4b-4e8a-9f10-5a1b2c3d4e03', name: 'Proxmox backups to a NAS: retention plan', day: -11, messages: 7, first: 'Retention for daily Proxmox backups to a 4 TB NAS, 6 VMs?', last: 'And how do I check a restore actually works?', project: 'lab/homelab-dashboard' },
+  { uuid: '0d2f6a3e-1c4b-4e8a-9f10-5a1b2c3d4e04', name: 'Talk outline: queues without Redis', day: -15, messages: 5, first: 'Help me outline a 20-minute talk about job queues on plain Postgres.', last: '', project: 'oss/tiny-queue' },
+];
+
 export const USAGE = { fiveHourPct: 34, fiveHourResetsInMin: 140, sevenDayPct: 41, sevenDayResetsInDays: 3 };

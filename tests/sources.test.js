@@ -235,3 +235,227 @@ test('on macOS the home walk stays out of ~/Library, ~/Pictures, ~/Music, ~/Movi
     fs.rmSync(base, { recursive: true, force: true });
   }
 });
+
+test('token usage: an index from before it was counted fills in without re-parsing turns; later appends count once', () => {
+  const { base, home, data } = tempHome('usage');
+  const proj = path.join(home, '.claude', 'projects', '-home-alex-demo');
+  fs.mkdirSync(proj, { recursive: true });
+  const id = '77777777-6666-4777-8888-999999999999';
+  const file = path.join(proj, `${id}.jsonl`);
+  const b = { isSidechain: false, cwd: '/home/alex/demo', sessionId: id, entrypoint: 'cli' };
+  const u = (i, o) => ({ input_tokens: i, output_tokens: o, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 });
+  const a = (mid, usage, ts) => line({ ...b, type: 'assistant', message: { id: mid, role: 'assistant', content: [{ type: 'text', text: 'ok' }], usage }, timestamp: ts });
+  fs.writeFileSync(file, line({ ...b, type: 'user', turnOrigin: 'human', message: { role: 'user', content: 'Go' }, timestamp: '2026-11-01T10:00:00.000Z' }) + a('msg_1', u(100, 10), '2026-11-01T10:00:01.000Z') + a('msg_1', u(100, 10), '2026-11-01T10:00:02.000Z'));
+  // The same message continues in the next write (it grew), then a new prompt and message; then msg_2 repeats.
+  const append1 = a('msg_1', u(100, 30), '2026-11-01T10:00:03.000Z') + line({ ...b, type: 'user', turnOrigin: 'human', message: { role: 'user', content: 'More' }, timestamp: '2026-11-01T10:05:00.000Z' }) + a('msg_2', u(50, 5), '2026-11-01T10:05:01.000Z');
+  const append2 = a('msg_2', u(50, 5), '2026-11-01T10:05:02.000Z');
+  const script = `const c = await import(${mod('config.js')}); c.ensureDirs(); const { SessionIndex } = await import(${mod('sources/sessions.js')});
+    const fs = await import('node:fs');
+    const id = ${JSON.stringify(id)}; const file = ${JSON.stringify(file)};
+    const strip = (m) => { delete m.usage; delete m.usageDays; delete m.usageMsg; m.outTokens = 999; };
+    const fresh = () => { const ix = new SessionIndex(); ix.adapters = []; ix.parsed = []; const orig = ix.indexFile.bind(ix); ix.indexFile = (f) => (ix.parsed.push(f.id), orig(f)); return ix; };
+    const ix = fresh();
+    await ix.scan();
+    const first = ix.get(id).usage;
+    // An index file written by an older version: no usage fields, and the outTokens it counted once per line.
+    const saved = JSON.parse(fs.readFileSync(c.paths.index, 'utf8'));
+    for (const s of saved.sessions) strip(s);
+    fs.writeFileSync(c.paths.index, JSON.stringify(saved));
+    const turnsBefore = fs.readFileSync(ix.turnsFile(id), 'utf8');
+    const ix2 = fresh();
+    const pending = ix2.usagePending();
+    await ix2.scan();
+    const filled = { usage: ix2.get(id).usage, outTokens: ix2.get(id).outTokens, parsed: ix2.parsed.length, pending: ix2.usagePending(), turnsSame: fs.readFileSync(ix2.turnsFile(id), 'utf8') === turnsBefore };
+    const savedAfter = JSON.parse(fs.readFileSync(c.paths.index, 'utf8')).sessions[0].usage;
+    // An old entry that grows before the backfill reached it: the indexed part is counted first, then the new lines.
+    strip(ix2.meta.get(id));
+    fs.appendFileSync(file, ${JSON.stringify(append1)});
+    await ix2.scan();
+    const grown = { ...ix2.get(id).usage };
+    fs.appendFileSync(file, ${JSON.stringify(append2)});
+    await ix2.scan();
+    console.log(JSON.stringify({ first, pending, filled, savedAfter, grown, again: ix2.get(id).usage, outTokens: ix2.get(id).outTokens, turns: ix2.loadTurns(id).length }));`;
+  try {
+    const r = runIn({ HOME: home, PILOTAGE_DATA: data, PILOTAGE_WSL: '0' }, script);
+    assert.deepEqual(r.first, { in: 100, out: 10, cw: 0, cr: 0 });
+    assert.equal(r.pending, 1, 'the old entry waits for its count');
+    assert.deepEqual(r.filled, { usage: { in: 100, out: 10, cw: 0, cr: 0 }, outTokens: 10, parsed: 0, pending: 0, turnsSame: true }, 'filled in by the backfill, turns not re-parsed');
+    assert.deepEqual(r.savedAfter, { in: 100, out: 10, cw: 0, cr: 0 }, 'and saved in the index');
+    assert.deepEqual(r.grown, { in: 150, out: 35, cw: 0, cr: 0 }, 'msg_1 grew from 10 to 30 output tokens; msg_2 is new');
+    assert.deepEqual(r.again, { in: 150, out: 35, cw: 0, cr: 0 }, 'a repeated line of msg_2 in a later write counts once');
+    assert.equal(r.outTokens, 35);
+    assert.equal(r.turns, 2);
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test('a live Codex session and a growing history.jsonl are read from where the last scan stopped, and their writes wait', () => {
+  const { base, home, data } = tempHome('appends');
+  const proj = path.join(home, '.claude', 'projects', '-home-alex-demo');
+  fs.mkdirSync(proj, { recursive: true });
+  const id = '66666666-7777-4888-9999-aaaaaaaaaaaa';
+  const cl = { isSidechain: false, cwd: '/home/alex/demo', sessionId: id, entrypoint: 'cli' };
+  fs.writeFileSync(path.join(proj, `${id}.jsonl`), line({ ...cl, type: 'user', turnOrigin: 'human', message: { role: 'user', content: 'Ship it' }, timestamp: '2026-11-01T10:00:00.000Z' }));
+  const history = path.join(home, '.claude', 'history.jsonl');
+  const hist = (sessionId, display, ts) => line({ display, timestamp: Date.parse(ts), project: '/home/alex/demo', sessionId });
+  fs.writeFileSync(history, hist(id, 'Ship it', '2026-11-01T10:00:00.000Z') + hist('gone-1', 'Old work', '2026-10-01T10:00:00.000Z'));
+  const uuid = '019aa7b0-dec5-72c1-b8c7-d3a780256999';
+  const day = path.join(home, '.codex', 'sessions', '2026', '11', '01');
+  fs.mkdirSync(day, { recursive: true });
+  const rollout = path.join(day, `rollout-2026-11-01T10-00-00-${uuid}.jsonl`);
+  const T = (m) => `2026-11-01T11:${String(m).padStart(2, '0')}:00.000Z`;
+  const ask = (m, text) => line({ timestamp: T(m), type: 'event_msg', payload: { type: 'user_message', message: text, images: [] } }) +
+    line({ timestamp: T(m), type: 'turn_context', payload: { cwd: '/home/alex/demo', model: 'gpt-5.1-codex' } }) +
+    line({ timestamp: T(m), type: 'response_item', payload: { type: 'custom_tool_call', call_id: `c${m}`, name: 'apply_patch', input: `*** Begin Patch\n*** Add File: src/f${m}.js\n+x\n*** End Patch` } }) +
+    line({ timestamp: T(m), type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: `Done ${m}` }] } });
+  fs.writeFileSync(rollout, line({ timestamp: T(0), type: 'session_meta', payload: { id: uuid, cwd: '/home/alex/demo', cli_version: '0.58.0', source: 'exec' } }) + ask(0, 'x'.repeat(100_000)));
+  const script = `const c = await import(${mod('config.js')}); c.ensureDirs();
+    const { SessionIndex } = await import(${mod('sources/sessions.js')});
+    const { parseCodexFile } = await import(${mod('sources/harness/codex.js')});
+    const fs = await import('node:fs'); const fsp = (await import('node:fs/promises')).default;
+    const read = new Map(); // file -> bytes read
+    const open = fsp.open;
+    fsp.open = async (...a) => { const fh = await open(...a); const r = fh.read.bind(fh); fh.read = async (...x) => { const res = await r(...x); read.set(String(a[0]), (read.get(String(a[0])) || 0) + res.bytesRead); return res; }; return fh; };
+    const rf = fsp.readFile;
+    fsp.readFile = async (f, ...x) => { const b = await rf(f, ...x); read.set(String(f), (read.get(String(f)) || 0) + b.length); return b; };
+    const ix = new SessionIndex();
+    await ix.scan();
+    const calls = { flush: 0, scheduleFlush: 0 };
+    const flush = ix.flush.bind(ix); ix.flush = () => (calls.flush++, flush());
+    const sched = ix.scheduleFlush.bind(ix); ix.scheduleFlush = () => (calls.scheduleFlush++, sched());
+    const steps = [];
+    const asks = ${JSON.stringify([1, 2, 3].map((m) => ask(m, `Step ${m}`)))};
+    const hists = ${JSON.stringify([1, 2, 3].map((m) => hist(id, `Step ${m}`, T(m))))};
+    for (let i = 0; i < 3; i++) {
+      read.clear();
+      fs.appendFileSync(${JSON.stringify(rollout)}, asks[i]);
+      fs.appendFileSync(${JSON.stringify(history)}, hists[i]);
+      const changed = await ix.scan();
+      steps.push({ changed, structural: ix.lastScan.structural, rollout: read.get(${JSON.stringify(rollout)}) || 0, history: read.get(${JSON.stringify(history)}) || 0,
+        appended: [Buffer.byteLength(asks[i]), Buffer.byteLength(hists[i])] });
+    }
+    const callsAfter = { ...calls };
+    const codexId = 'codex-${uuid}';
+    const fresh = await parseCodexFile(${JSON.stringify(rollout)}, codexId);
+    const m = ix.get(codexId);
+    const same = JSON.stringify([m.counts, m.tools, m.files, m.offset, m.size, m.turnCount, m.lastPrompt]) === JSON.stringify([fresh.meta.counts, fresh.meta.tools, fresh.meta.files, fresh.meta.offset, fresh.meta.size, fresh.meta.turnCount, fresh.meta.lastPrompt]);
+    const turnsSame = JSON.stringify(ix.loadTurns(codexId)) === JSON.stringify(fresh.turns);
+    const onDisk = JSON.parse(fs.readFileSync(ix.turnsFile(codexId), 'utf8')).length;
+    // A history line for a session that has no transcript is a new session: structural.
+    fs.appendFileSync(${JSON.stringify(history)}, ${JSON.stringify(hist('gone-2', 'Lost transcript', '2026-11-01T12:00:00.000Z'))});
+    const gone = await ix.scan();
+    const goneStructural = ix.lastScan.structural;
+    await ix.flush();
+    console.log(JSON.stringify({ calls: callsAfter, steps, same, turnsSame, onDisk, after: JSON.parse(fs.readFileSync(ix.turnsFile(codexId), 'utf8')).length,
+      gone, goneStructural, listed: ix.list().map((s) => s.id).sort(), histPrompts: ix.history.get(${JSON.stringify(id)}).prompts.length, oldPrompts: ix.history.get('gone-1').prompts.length }));`;
+  try {
+    const r = runIn({ HOME: home, PILOTAGE_DATA: data, PILOTAGE_WSL: '0', CODEX_HOME: path.join(home, '.codex') }, script);
+    assert.deepEqual(r.calls, { flush: 0, scheduleFlush: 3 }, `appends never rewrite the whole index at once (${JSON.stringify(r.calls)})`);
+    for (const s of r.steps) {
+      assert.deepEqual(s.changed, [`codex-${uuid}`], 'only the Codex session changed (history lines of a session with a transcript show nothing new)');
+      assert.equal(s.structural, false, 'no registry rebuild for appends');
+      assert.equal(s.rollout, s.appended[0], `only the appended rollout bytes are read (${s.rollout} vs ${s.appended[0]})`);
+      assert.ok(s.history <= s.appended[1] + 256, `only the appended history bytes are read (${s.history} vs ${s.appended[1]})`);
+    }
+    assert.ok(r.same && r.turnsSame, 'an incremental parse gives what a fresh one gives');
+    assert.equal(r.onDisk, 1, 'turns file not rewritten on each append');
+    assert.equal(r.after, 4, 'flush writes the deferred turns');
+    assert.equal(r.histPrompts, 4, 'appended history prompts are merged');
+    assert.equal(r.oldPrompts, 1, 'earlier history entries are kept');
+    assert.deepEqual(r.gone, ['gone-2']);
+    assert.equal(r.goneStructural, true, 'a new history-only session is structural');
+    assert.deepEqual(r.listed, [id, `codex-${uuid}`, 'gone-1', 'gone-2'].sort());
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test('a forked session counts only its own work: copied turns stay with the parent in blocks, activity and totals', () => {
+  const { base, home, data } = tempHome('fork');
+  const demo = path.join(home, 'demo');
+  fs.mkdirSync(demo);
+  execFileSync('git', ['-C', demo, 'init', '-q']);
+  const proj = path.join(home, '.claude', 'projects', demo.replace(/[^a-zA-Z0-9]/g, '-'));
+  fs.mkdirSync(proj, { recursive: true });
+  const ids = { P: '11111111-aaaa-4aaa-8aaa-000000000001', F: '11111111-aaaa-4aaa-8aaa-000000000002', Q: '11111111-aaaa-4aaa-8aaa-000000000003', G: '11111111-aaaa-4aaa-8aaa-000000000004' };
+  const t0 = Date.now() - 2 * 86400e3;
+  const at = (min) => new Date(t0 + min * 60e3).toISOString();
+  const user = (sid, uuid, min, content, extra = {}) => line({ isSidechain: false, cwd: demo, sessionId: sid, entrypoint: 'cli', type: 'user', turnOrigin: 'human', uuid, message: { role: 'user', content }, timestamp: at(min), ...extra });
+  // Each reply spent 10 input and 5 output tokens; a copied line keeps its message id and usage.
+  const reply = (sid, uuid, min, text) => line({ isSidechain: false, cwd: demo, sessionId: sid, type: 'assistant', uuid, message: { id: `msg-${uuid}`, role: 'assistant', content: [{ type: 'text', text }], usage: { input_tokens: 10, output_tokens: 5 } }, timestamp: at(min) });
+  // P: two prompts, then stopped. F = claude --resume P --fork-session: P's lines copied (uuids and times kept, the
+  // session id rewritten), then its own prompt.
+  const pLines = (sid) => user(sid, 'p-1', 0, 'Plan the API') + reply(sid, 'p-2', 1, 'Planned.') + user(sid, 'p-3', 5, 'Add auth') + reply(sid, 'p-4', 6, 'Auth added.');
+  fs.writeFileSync(path.join(proj, `${ids.P}.jsonl`), pLines(ids.P));
+  const fFile = path.join(proj, `${ids.F}.jsonl`);
+  fs.writeFileSync(fFile, pLines(ids.F) + user(ids.F, 'f-1', 120, 'Try GraphQL instead') + reply(ids.F, 'f-2', 121, 'Switched.'));
+  // Q was compacted; G forked it after the compaction, so G starts at Q's compact summary.
+  const qTail = (sid) => user(sid, 'q-2', 30, 'Summary of the earlier work', { isCompactSummary: true }) + user(sid, 'q-3', 31, 'Continue the export') + reply(sid, 'q-4', 32, 'Exported.');
+  fs.writeFileSync(path.join(proj, `${ids.Q}.jsonl`), user(ids.Q, 'q-1', 20, 'Start the export') + reply(ids.Q, 'q-1r', 21, 'Started.') + qTail(ids.Q));
+  fs.writeFileSync(path.join(proj, `${ids.G}.jsonl`), qTail(ids.G) + user(ids.G, 'g-1', 200, 'Branch off to CSV') + reply(ids.G, 'g-2', 201, 'CSV done.'));
+  const script = `const c = await import(${mod('config.js')}); c.ensureDirs();
+    const { SessionIndex } = await import(${mod('sources/sessions.js')});
+    const { ProjectRegistry } = await import(${mod('sources/projects.js')});
+    const { Views, tokensOf } = await import(${mod('views.js')});
+    const { computeBlocks } = await import(${mod('ai/engine.js')});
+    const fs = await import('node:fs');
+    const ids = ${JSON.stringify(ids)};
+    const ix = new SessionIndex(); ix.adapters = [];
+    await ix.scan();
+    const store = { settings: { scan: { hiddenPaths: [], extraRoots: [], depth: 3 } }, project: () => ({}), session: () => ({}), data: { workspaces: {} } };
+    const reg = new ProjectRegistry(ix, store);
+    await reg.rebuild();
+    const views = new Views({ index: ix, registry: reg, store, live: { get: () => null }, ai: { blocksOf: () => [], digestOf: () => null, state: { blocks: {}, projects: {} } }, processes: () => [] });
+    const inh = (id) => { const x = ix.get(id).inherited; if (!x) return null; const { usageDays, ...rest } = x; return { ...rest, daysIn: Object.values(usageDays || {}).reduce((a, u) => a + u[0], 0) }; };
+    const out = {
+      inherited: Object.fromEntries(Object.entries(ids).map(([k, id]) => [k, inh(id)])),
+      blocksF: computeBlocks(ix.get(ids.F), ix.loadTurns(ids.F)).map((b) => [b.i0, b.prompts]),
+      blocksG: computeBlocks(ix.get(ids.G), ix.loadTurns(ids.G)).map((b) => [b.i0, b.prompts]),
+      raw: Object.values(ids).reduce((n, id) => n + ix.get(id).counts.h, 0),
+      project: [...reg.projects.values()].map((p) => p.humanPrompts),
+      activity: views.activityByDay(28).reduce((n, d) => n + d.prompts, 0),
+      tokensRaw: Object.values(ids).reduce((n, id) => n + ix.get(id).usage.in, 0),
+      perSession: Object.fromEntries(Object.entries(ids).map(([k, id]) => [k, tokensOf(ix.get(id))?.input])),
+      usage: (({ totals, projects, days }) => ({ total: totals.input, projects: projects.map((p) => p.input), days: Object.fromEntries(days.filter((d) => d.input).map((d) => [d.day, d.input])) }))(
+        views.usage({ fromDay: new Date(${t0} - 86400e3).toISOString().slice(0, 10), toDay: new Date(Date.now() + 86400e3).toISOString().slice(0, 10) })),
+    };
+    fs.appendFileSync(${JSON.stringify(fFile)}, ${JSON.stringify(user(ids.F, 'f-3', 130, 'And document it'))});
+    out.grown = await ix.scan();
+    out.grownStructural = ix.lastScan.structural;
+    out.grownF = inh(ids.F);
+    delete ix.get(ids.P).roots; // indexed by an older version: parsed again once
+    await ix.scan();
+    out.reparsed = ix.get(ids.P).roots;
+    fs.rmSync(${JSON.stringify(path.join(proj, `${ids.P}.jsonl`))});
+    await ix.scan();
+    out.orphan = inh(ids.F);
+    console.log(JSON.stringify(out));`;
+  try {
+    const r = runIn({ HOME: home, PILOTAGE_DATA: data, PILOTAGE_WSL: '0' }, script);
+    // The copied lines' tokens too (P's two replies; Q's one after its compaction), per day as well.
+    const F = { from: ids.P, n: 2, h: 2, s: 0, usage: { in: 20, out: 10, cw: 0, cr: 0 }, daysIn: 20 };
+    assert.deepEqual(r.inherited, { P: null, F, Q: null, G: { from: ids.Q, n: 2, h: 1, s: 0, usage: { in: 10, out: 5, cw: 0, cr: 0 }, daysIn: 10 } }, JSON.stringify(r.inherited));
+    assert.deepEqual(r.blocksF, [[2, 1]], "the fork's blocks start at its own work");
+    assert.deepEqual(r.blocksG, [[2, 1]], 'also for a fork made after a compaction');
+    assert.equal(r.raw, 9);
+    assert.deepEqual(r.project, [6], 'the project total counts each typed prompt once');
+    assert.equal(r.activity, 6, 'the timeline counts each prompt once');
+    assert.equal(r.tokensRaw, 90, 'each transcript holds its copies');
+    // Tokens: each reply once, per session, per project and on its own day (a fork's copies are the parent's).
+    assert.deepEqual(r.perSession, { P: 20, F: 10, Q: 20, G: 10 }, "a fork's tokens are its own replies'");
+    assert.equal(r.usage.total, 60, 'token totals count each reply once');
+    assert.deepEqual(r.usage.projects, [60], 'the project total too');
+    const day = (min) => { const d = new Date(t0 + min * 60e3); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+    const days = {};
+    for (const min of [1, 6, 121, 21, 32, 201]) days[day(min)] = (days[day(min)] || 0) + 10; // P's 2, F's own 1, Q's 2, G's own 1
+    assert.deepEqual(r.usage.days, days, 'and each day once');
+    assert.deepEqual(r.grown, [ids.F], 'a fork that grows changes only itself');
+    assert.equal(r.grownStructural, false);
+    assert.deepEqual(r.grownF, F);
+    assert.deepEqual(r.reparsed, ['p-1']);
+    assert.equal(r.orphan, null, 'once the parent transcript is gone, the fork keeps the only copy');
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});

@@ -9,6 +9,8 @@ export type NewSessionPrefill = {
   ideaId?: string;
   title?: string;
   worktree?: string;
+  /** The prompt (or the CLAUDE.md it points to) was written by Pilotage's AI: the session asks before acting. */
+  aiPrompt?: boolean;
 };
 
 type Ctx = {

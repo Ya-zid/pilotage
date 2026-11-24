@@ -20,7 +20,15 @@ Protected against:
 - **Leaking secrets into summaries**: tokens, passwords and keys that appear in prompts are redacted before
   anything is stored, shown or sent to an AI provider.
 - **The AI doing things**: AI jobs only produce text. `claude -p` runs with no tools, no MCP servers, no slash
-  commands and no session persistence, in an empty sandbox folder; `codex exec` runs read-only.
+  commands and no session persistence, in an empty sandbox folder. `codex exec` (if you pick Codex as the AI
+  provider) runs in Codex's read-only sandbox with no MCP and no web search, and is told not to use tools; but Codex
+  has no switch that removes its shell, so its model *could* still run read-only commands (read a file on the PC)
+  while summarizing. Keep Claude Code as the provider if that matters to you.
+- **AI-written text steering a session**: summaries are made from transcripts, which can quote a web page, a
+  README or a log. A session whose first prompt or CLAUDE.md comes from that text (a suggested task's Start,
+  Home's focus "Start", a new project's kickoff and first session) asks before acting whatever Settings → New
+  sessions → Permissions says ("Plan first" is kept), and a new project's CLAUDE.md marks that background as
+  unverified context, not instructions.
 
 Not protected against (out of scope):
 
@@ -46,8 +54,9 @@ Not protected against (out of scope):
 - **The CLI key.** `bin/pilotage` talks to the server with a desktop key read from `data/secrets.json`; it is accepted
   on the local listener only and never appears in a URL. `pilotage rotate-key` replaces it.
 - **Two listeners.** The PC browser and the CLI use one loopback port; phones arrive on another. Requests on the
-  phone listener cannot pair devices, manage devices, change the firewall, rotate keys or change AI providers (a
-  stored API key follows its provider, so changing the address would send the key elsewhere).
+  phone listener cannot pair devices, manage devices, change the firewall, rotate keys, change AI providers (a
+  stored API key follows its provider, so changing the address would send the key elsewhere) or import files (the
+  claude.ai export reads a path on the PC).
 - **CSRF.** Mutating requests need `X-Pilotage: 1` and `Content-Type: application/json`.
 - **Host allow-list.** `localhost`, `127.0.0.1` and `*.localhost` on the PC listener; IP addresses and VPN host names
   (NetBird, Tailscale) on the phone listener. Anything else gets `421`.
@@ -68,7 +77,8 @@ for the setup and for how the traffic is protected on Wi-Fi and over a VPN.
   and no `git status` in a repo whose own config names a program git would run: filters, git-lfs extensions or
   transfer agents) and project folders. It does not follow symlinks out of a
   project when showing documents, and never reads files that look like secrets (`.env`, keys, credentials) for the
-  project scout or spin-off handoffs.
+  project scout or spin-off handoffs. A claude.ai data export only when you import one (Settings → Sources, from the
+  PC): just its `conversations.json`, once; a compact, redacted index is kept in `data/claude-ai.json`.
 - **Writes**: its own data folder (`~/.pilotage` for an npm install, `data/` in a git clone; `data/` below means
   that folder); new folders you explicitly create (Spin off / New project), only inside your home folder and never
   inside `~/.ssh`, `~/.claude`, `~/.config` or Pilotage itself; and, if you run `pilotage install`, on WSL a Startup

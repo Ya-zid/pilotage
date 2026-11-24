@@ -136,6 +136,21 @@ test('extraction: a shortened title is never replaced by the long wording again'
   assert.equal(normalizeItem(it).titleBy, 'short', 'kept on save/load');
 });
 
+test('extraction: a shortened title follows when its block is re-summarised with a different next step', () => {
+  const blocks = Object.fromEntries([blk('S1', 0, 1, P, digest('Fix the Safari login loop on the checkout page: the session cookie is dropped after the redirect.'))]);
+  const data = { items: [], tombstones: [] };
+  reconcile(data, inputOf(blocks), NOW);
+  const it = data.items[0];
+  it.title = 'Fix the Safari login loop';
+  it.titleBy = 'short';
+  // Same block, summarised again: the next step is now other work. Start would send it, so the title must say it.
+  blocks['S1:0'].digest = digest('Ship v2.3 to the App Store once the review notes are answered.', { todo: 'Ship v2.3 to the App Store' });
+  reconcile(data, inputOf(blocks), NOW + 60e3);
+  assert.match(it.detail, /App Store/);
+  assert.equal(it.title, 'Ship v2.3 to the App Store');
+  assert.equal(it.titleBy, null);
+});
+
 test('suggestions expire after 7 days', () => {
   assert.equal(EXPIRE_DAYS, 7);
 });

@@ -2,6 +2,7 @@
 import React, { useMemo, useState } from 'react';
 import { GitBranch, Info, Plus } from 'lucide-react';
 import { useApp } from '../AppContext';
+import { useBootstrap } from '../../api';
 import type { ProjectDetail, Worktree } from '../../types';
 import { Callout, Card, CopyButton, EmptyState, IconButton, Meta, PathLabel, SegmentedControl, StatusIcon, WorkStatus } from '../ui';
 import { ago, fmtDateTime, plural } from '../../util';
@@ -18,15 +19,33 @@ function State({ w }: { w: Worktree }) {
   return <WorkStatus status="in_progress" label="Open" />;
 }
 
+/**
+ * A dev server's port: a link to it on the PC. On the phone, localhost is the phone itself (the link opened nothing
+ * or the wrong thing), so the port is plain text.
+ */
+export function DevPort({ port, label }: { port: number; label: string }) {
+  const { data: boot } = useBootstrap();
+  if (boot?.device.viaLan) {
+    return (
+      <span className="mono small" title={`localhost:${port} on your PC (this phone can't open it)`}>
+        {label}
+      </span>
+    );
+  }
+  return (
+    <a className="link mono small" href={`http://localhost:${port}`} target="_blank" rel="noreferrer">
+      {label}
+    </a>
+  );
+}
+
 function Servers({ w }: { w: Worktree }) {
   const ports = w.servers.flatMap((s) => s.ports);
   if (!ports.length) return <span className="fainter">—</span>;
   return (
     <span className="cluster">
       {ports.map((port) => (
-        <a key={port} className="link mono small" href={`http://localhost:${port}`} target="_blank" rel="noreferrer">
-          :{port}
-        </a>
+        <DevPort key={port} port={port} label={`:${port}`} />
       ))}
     </span>
   );

@@ -11,7 +11,18 @@
 const net = require('net');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const { execFile } = require('child_process');
+
+// A short hash of this file, sent in every heartbeat: Pilotage restarts a forwarder whose code is older than the copy
+// it ships (otherwise an upgrade only reached the forwarder at the next Windows restart).
+const CODE = (() => {
+  try {
+    return require('crypto').createHash('sha256').update(fs.readFileSync(__filename)).digest('hex').slice(0, 16);
+  } catch (_) {
+    return null;
+  }
+})();
 
 const dir = path.join(process.env.LOCALAPPDATA || __dirname, 'Pilotage');
 const hbFile = path.join(dir, 'forwarder.json');
@@ -71,10 +82,25 @@ function pollSsid() {
   });
 }
 
-function allowed(remote) {
+// The PC's own addresses on VPN adapters (NetBird's wt0, Tailscale, WireGuard, ZeroTier). A peer in a VPN range only
+// counts as a VPN peer when it arrives on one of them: some hotspots and ISP boxes hand out 100.64.0.0/10 (CGNAT)
+// addresses on plain Wi-Fi, where those neighbours must be treated as Wi-Fi neighbours.
+const VPN_ADAPTER = /^(wt\d+|wg\d+|netbird|tailscale|wireguard|zerotier|zt[0-9a-z]+)/i;
+let vpnLocal = new Set();
+function pollInterfaces(ifaces = os.networkInterfaces()) {
+  const next = new Set();
+  for (const [name, list] of Object.entries(ifaces || {})) {
+    if (!VPN_ADAPTER.test(name)) continue;
+    for (const a of list || []) if (a && a.address) next.add(String(a.address).replace(/^::ffff:/, ''));
+  }
+  vpnLocal = next;
+}
+
+function allowed(remote, local) {
   const ip = String(remote || '').replace(/^::ffff:/, '');
   if (ip === '127.0.0.1') return true; // local test from the PC itself
-  if ((cfg.vpnCidrs || []).some((c) => inCidr(ip, c))) return true;
+  const onVpn = vpnLocal.has(String(local || '').replace(/^::ffff:/, ''));
+  if (onVpn && (cfg.vpnCidrs || []).some((c) => inCidr(ip, c))) return true;
   return !!currentSsid && (cfg.trustedSsids || []).includes(currentSsid);
 }
 
@@ -82,71 +108,80 @@ function allowed(remote) {
 function heartbeat(exiting = false) {
   try {
     fs.mkdirSync(dir, { recursive: true });
-    const hb = { pid: process.pid, listenPort: cfg.listenPort, targetPort: cfg.targetPort, at: Date.now(), connections, refused, error: lastError, ssidTrusted: !!currentSsid && (cfg.trustedSsids || []).includes(currentSsid), onWifi: !!currentSsid };
+    const hb = { pid: process.pid, code: CODE, listenPort: cfg.listenPort, targetPort: cfg.targetPort, at: Date.now(), connections, refused, error: lastError, ssidTrusted: !!currentSsid && (cfg.trustedSsids || []).includes(currentSsid), onWifi: !!currentSsid };
     if (exiting) hb.exitedAt = Date.now();
     fs.writeFileSync(hbFile, JSON.stringify(hb));
   } catch (_) {}
 }
 
-// Leave a trace when it stops on an error (it runs hidden: nobody sees its console).
-process.on('uncaughtException', (e) => {
-  lastError = String((e && e.stack) || e).slice(0, 500);
-  log(`stopped on an error: ${lastError}`);
-  heartbeat(true);
-  process.exit(1);
-});
+/** Everything with side effects: run only when started as the forwarder, not when the tests require this file. */
+function main() {
+  // Leave a trace when it stops on an error (it runs hidden: nobody sees its console).
+  process.on('uncaughtException', (e) => {
+    lastError = String((e && e.stack) || e).slice(0, 500);
+    log(`stopped on an error: ${lastError}`);
+    heartbeat(true);
+    process.exit(1);
+  });
 
-loadConfig();
-pollSsid();
 
-const server = net.createServer((client) => {
-  if (!allowed(client.remoteAddress)) {
-    refused++;
-    client.destroy();
-    return;
-  }
-  connections++;
-  client.setNoDelay(true);
-  const upstream = net.connect({ host: '127.0.0.1', port: cfg.targetPort });
-  upstream.setNoDelay(true);
-  const close = () => {
-    client.destroy();
-    upstream.destroy();
-  };
-  client.on('error', close);
-  upstream.on('error', close);
-  client.on('close', close);
-  upstream.on('close', close);
-  client.setTimeout(10 * 60 * 1000, close);
-  client.pipe(upstream);
-  upstream.pipe(client);
-});
+  loadConfig();
+  pollSsid();
+  pollInterfaces();
 
-server.on('error', (e) => {
-  if (e.code === 'EADDRINUSE') {
-    log(`port ${cfg.listenPort} already in use; another forwarder is probably running. Exiting.`);
-    // Only when no other forwarder keeps the heartbeat fresh: otherwise this would mark a running one as gone.
-    try {
-      const prev = JSON.parse(fs.readFileSync(hbFile, 'utf8'));
-      if (Date.now() - (prev.at || 0) > 90000) {
-        lastError = `port ${cfg.listenPort} in use by another program`;
-        heartbeat(true);
-      }
-    } catch (_) {}
-    process.exit(0);
-  }
-  lastError = String(e.message || e);
-  log(`server error: ${lastError}`);
-  heartbeat(true); // exiting: never shown as running
-  setTimeout(() => process.exit(1), 500);
-});
+  const server = net.createServer((client) => {
+    if (!allowed(client.remoteAddress, client.localAddress)) {
+      refused++;
+      client.destroy();
+      return;
+    }
+    connections++;
+    client.setNoDelay(true);
+    const upstream = net.connect({ host: '127.0.0.1', port: cfg.targetPort });
+    upstream.setNoDelay(true);
+    const close = () => {
+      client.destroy();
+      upstream.destroy();
+    };
+    client.on('error', close);
+    upstream.on('error', close);
+    client.on('close', close);
+    upstream.on('close', close);
+    client.setTimeout(10 * 60 * 1000, close);
+    client.pipe(upstream);
+    upstream.pipe(client);
+  });
 
-server.listen(cfg.listenPort, '0.0.0.0', () => {
-  log(`listening on 0.0.0.0:${cfg.listenPort} -> 127.0.0.1:${cfg.targetPort} (pid ${process.pid})`);
-  setTimeout(heartbeat, 1500);
-  setInterval(() => {
-    loadConfig();
-    pollSsid();
-    heartbeat();
-  }, 20 * 1000);
-});
+  server.on('error', (e) => {
+    if (e.code === 'EADDRINUSE') {
+      log(`port ${cfg.listenPort} already in use; another forwarder is probably running. Exiting.`);
+      // Only when no other forwarder keeps the heartbeat fresh: otherwise this would mark a running one as gone.
+      try {
+        const prev = JSON.parse(fs.readFileSync(hbFile, 'utf8'));
+        if (Date.now() - (prev.at || 0) > 90000) {
+          lastError = `port ${cfg.listenPort} in use by another program`;
+          heartbeat(true);
+        }
+      } catch (_) {}
+      process.exit(0);
+    }
+    lastError = String(e.message || e);
+    log(`server error: ${lastError}`);
+    heartbeat(true); // exiting: never shown as running
+    setTimeout(() => process.exit(1), 500);
+  });
+
+  server.listen(cfg.listenPort, '0.0.0.0', () => {
+    log(`listening on 0.0.0.0:${cfg.listenPort} -> 127.0.0.1:${cfg.targetPort} (pid ${process.pid})`);
+    setTimeout(heartbeat, 1500);
+    setInterval(() => {
+      loadConfig();
+      pollSsid();
+      pollInterfaces();
+      heartbeat();
+    }, 20 * 1000);
+  });
+}
+
+if (require.main === module) main();
+else module.exports = { CODE, allowed, pollInterfaces, _set: (c, ssid) => ((cfg = { ...cfg, ...c }), (currentSsid = ssid)) };

@@ -1,6 +1,7 @@
 // Settings → New sessions, Projects & scanning, Name & appearance, About.
 import React, { useEffect, useMemo, useState } from 'react';
-import { Check, Cloud, Copy, FolderSearch, Laptop, Monitor, Moon, Palette, Rocket, Smartphone, Sun, Tag, Terminal, Info, ShieldCheck, UserRound } from 'lucide-react';
+import { Bell, Check, Cloud, Copy, FolderSearch, Laptop, Monitor, Moon, Palette, Rocket, Smartphone, Sun, Tag, Terminal, Info, ShieldCheck, UserRound } from 'lucide-react';
+import { enableNotifications, notifyEnabled } from '../../needsYou';
 import { terminalPlace, useBootstrap, useInvalidate, useProjects, useTerminal } from '../../api';
 import type { Settings as SettingsT } from '../../types';
 import { Button, IconButton, SegmentedControl, Skeleton, Switch, WorkspaceAvatar, useToast } from '../ui';
@@ -347,7 +348,40 @@ export function AppearanceSection({ s, patch }: { s: SettingsT; patch: PatchFn }
           </SettingRow>
         </SettingRows>
       </SettingsCard>
+      <NotifyCard />
     </>
+  );
+}
+
+/** Per device: a desktop notification when a session starts waiting for you while Pilotage is in the background. */
+function NotifyCard() {
+  const toast = useToast();
+  const [on, setOn] = useState(notifyEnabled());
+  const supported = typeof Notification !== 'undefined' && window.isSecureContext;
+  return (
+    <SettingsCard title="Notifications" icon={<Bell />}>
+      <SettingRows>
+        <SettingRow
+          label="When a session needs you"
+          hint={
+            supported
+              ? 'This device shows a notification when a session starts waiting for an answer (a permission prompt, a question) while Pilotage is in the background. The tab title always counts them.'
+              : 'Notifications need https or the PC itself (http://pilotage.localhost). The tab title still counts the sessions waiting for you.'
+          }
+        >
+          <Switch
+            on={on}
+            label="Notify me when a session needs me"
+            onChange={async (v) => {
+              const ok = await enableNotifications(v);
+              setOn(ok);
+              if (v && !ok) toast(supported ? 'Notifications are blocked for this site in the browser settings' : 'Notifications need https on this device', true);
+              else toast(ok ? 'Notifications on for this device' : 'Notifications off');
+            }}
+          />
+        </SettingRow>
+      </SettingRows>
+    </SettingsCard>
   );
 }
 
@@ -392,7 +426,7 @@ export function AboutSection() {
             <dt>Version</dt>
             <dd className="mono">{boot?.version || '…'}</dd>
             <dt>Data folder</dt>
-            <dd className="mono">~/pilotage/data</dd>
+            <dd className="mono">{boot?.dataDir || '…'}</dd>
             {boot?.device && (
               <>
                 <dt>This browser</dt>
@@ -405,7 +439,9 @@ export function AboutSection() {
           </dl>
           <div className="promise">
             <ShieldCheck size={16} className="tone-green" aria-hidden="true" />
-            <p className="small">Pilotage never changes your projects or Claude's files. It only creates folders when you spin off or start a new project.</p>
+            <p className="small">
+              Pilotage never changes your projects or Claude's files. It only creates folders when you spin off or start a new project, and writes one thing for Claude Code when you ask it to: "Trust this folder" (or the automatic setting) records Claude's folder-trust answer in ~/.claude.json.
+            </p>
           </div>
         </div>
       </SettingsCard>

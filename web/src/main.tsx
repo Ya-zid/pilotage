@@ -4,6 +4,7 @@ import ReactDOM from 'react-dom/client';
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { queryClient, useServerEvents } from './api';
+import { useNeedsYouSignals } from './needsYou';
 import { AppProvider } from './components/AppContext';
 import { Layout } from './components/Layout';
 import { ToastProvider, useToast, LoadingCard, Empty } from './components/ui';
@@ -20,6 +21,7 @@ const Ideas = lazy(() => import('./pages/Ideas'));
 const Settings = lazy(() => import('./pages/Settings'));
 const Tasks = lazy(() => import('./pages/Tasks'));
 const Guide = lazy(() => import('./pages/Guide'));
+const MapPage = lazy(() => import('./pages/Map'));
 
 /** Old addresses keep working: /live → /sessions, /timeline → /history (query string and hash kept). */
 function Redirect({ to }: { to: string }) {
@@ -76,6 +78,7 @@ class Boundary extends React.Component<{ children: React.ReactNode }, { error: E
 
 function App() {
   useServerEvents();
+  useNeedsYouSignals();
   return (
     <>
       <PairedNotice />
@@ -93,6 +96,7 @@ function App() {
           <Route path="guide" element={<Suspense fallback={<LoadingCard />}><Guide /></Suspense>} />
           <Route path="portfolio" element={<Suspense fallback={<LoadingCard />}><Portfolio /></Suspense>} />
           <Route path="ideas" element={<Suspense fallback={<LoadingCard />}><Ideas /></Suspense>} />
+          <Route path="map" element={<Suspense fallback={<LoadingCard />}><MapPage /></Suspense>} />
           <Route path="settings" element={<Suspense fallback={<LoadingCard />}><Settings /></Suspense>} />
           <Route path="more" element={<More />} />
           <Route path="*" element={<NotFound />} />

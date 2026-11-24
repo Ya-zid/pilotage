@@ -98,7 +98,7 @@ All AI work (digests, briefs, daily brief, CV) goes through one provider:
 | id | what | usage guard |
 |---|---|---|
 | `claude-cli` (default) | headless `claude -p` on the subscription. Optional `configDir` pins a Claude account (`CLAUDE_CONFIG_DIR`). | 5h/7d usage % (Settings → AI) |
-| `codex-cli` | `codex exec`, read-only sandbox, no MCP, no web search, `--output-schema` | daily call cap |
+| `codex-cli` | `codex exec`, read-only sandbox (reads stay possible: Codex can't turn its shell off), no MCP, no web search, `--output-schema` | daily call cap |
 | `openai-compatible` | `POST {baseUrl}/chat/completions` with a model and API key (DeepSeek, OpenRouter, OpenAI, Groq, Ollama, custom) | daily call cap |
 
 ```ts
@@ -216,6 +216,8 @@ New optional body field:
 type LaunchBody = {
   // ...existing: projectId, worktree, name, prompt, mode, resumeId, fork, model, permissionMode, ideaId
   harness?: Harness;   // default 'claude'. A resumeId starting with 'codex-' / 'gemini-' implies its harness.
+  aiPrompt?: boolean;  // the prompt (or the CLAUDE.md it points to) was written by Pilotage's AI: the session asks
+                       // before acting ('default'; 'plan' is kept), whatever permissionMode or Settings say
 };
 // The Launch record gains: harness: Harness; note?: string
 ```
@@ -227,7 +229,9 @@ Rules:
 - Resume: codex yes (`resumeId: 'codex-<uuid>'` → `codex resume <uuid>`). Gemini cannot be resumed (error).
   `fork` is Claude-only (error).
 - `model`: any model name for codex/gemini (e.g. `gpt-5.1-codex`, `gemini-2.5-pro`). Claude aliases (`opus`, …) and the
-  Claude default from settings are ignored, and the CLI's own default is used.
+  Claude default from settings are ignored, and the CLI's own default is used. For Claude, leave `model` out to use
+  the default from Settings (`''` means Claude Code's own default); a value other than `''`, `opus`, `sonnet`, `haiku`,
+  `fable` or their full ids → 400 `Unknown model "…"`.
 - `permissionMode` mapping:
 
   | Pilotage | codex | gemini |

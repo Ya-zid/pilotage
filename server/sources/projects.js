@@ -5,7 +5,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { HOME, WIN_HOME, SCAN_SKIP, HOME_SKIP, isInternalPath, CLAUDE_DIR, WIN_CLAUDE_DIR, paths } from '../config.js';
 import { gitKind, statusOf, repoExtras, myCommitTimes, gitIdentities } from './git.js';
-import { projectKeyFor } from './sessions.js';
+import { projectKeyFor, ownPrompts } from './sessions.js';
 import { readJSONSync, writeJSON, hash, isInside, pLimit, log, clip, isoDay, holdsProjects } from '../util.js';
 import { mergedWorkspaceKey } from '../workspaces.js';
 
@@ -147,6 +147,7 @@ export class ProjectRegistry {
     // sessions would leave the repo for a phantom non-git project.
     this.worktreeRoots = readJSONSync(paths.worktreeRoots, {}) || {};
     this.scanned = []; // candidate dirs from filesystem scan
+    this.known = new Set(); // folders Pilotage created (spin-offs, new projects): projects at any depth, dot-folders too
     this.lastScanAt = 0;
     this.gitBusy = false;
   }
@@ -242,7 +243,7 @@ export class ProjectRegistry {
     this.resolveCache.clear();
     const sessions = this.index.list();
     const cwds = new Set(sessions.map((s) => s.cwd).filter(Boolean));
-    this.candidateSet = new Set([...this.scanned, ...cwds]);
+    this.candidateSet = new Set([...this.scanned, ...cwds, ...[...this.known].filter((d) => fs.existsSync(d))]);
     const projects = new Map();
     const ensure = (root) => {
       if (projects.has(root)) return projects.get(root);
@@ -280,7 +281,7 @@ export class ProjectRegistry {
       const last = s.lastAt || 0;
       p.lastAt = Math.max(p.lastAt, last);
       if (s.startedAt) p.firstAt = p.firstAt ? Math.min(p.firstAt, s.startedAt) : s.startedAt;
-      p.humanPrompts += s.counts?.h || 0;
+      p.humanPrompts += ownPrompts(s);
       if (isAutomation(s)) p.automationRuns++;
       if (r.worktree) {
         let w = p.worktrees.get(r.worktree);
@@ -360,7 +361,7 @@ export class ProjectRegistry {
         const last = s.lastAt || 0;
         p.lastAt = Math.max(p.lastAt, last);
         if (s.startedAt) p.firstAt = p.firstAt ? Math.min(p.firstAt, s.startedAt) : s.startedAt;
-        p.humanPrompts += s.counts?.h || 0;
+        p.humanPrompts += ownPrompts(s);
         if (isAutomation(s)) p.automationRuns++;
         const wt = this.resolve(s.cwd)?.worktree;
         const w = wt ? p.worktrees.get(wt) : null;

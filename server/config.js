@@ -208,6 +208,7 @@ export const paths = {
   gitCache: path.join(DATA, 'index', 'git.json'),
   worktreeRoots: path.join(DATA, 'index', 'worktree-roots.json'),
   netInfo: path.join(DATA, 'net.json'),
+  lock: path.join(DATA, 'server.lock'), // one server per data folder (instance-lock.js)
 };
 
 export function ensureDirs() {

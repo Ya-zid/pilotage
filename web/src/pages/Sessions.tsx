@@ -6,16 +6,17 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { Archive, Bot, CalendarDays, Info, MessagesSquare, Search, SearchX, SlidersHorizontal, TriangleAlert, X } from 'lucide-react';
 import { api, useLive, useProjects, useSearch } from '../api';
-import { useHarnesses } from '../api-extra';
+import { useChats, useHarnesses } from '../api-extra';
 import { Button, Card, Disclosure, Dot, EmptyState, IconButton, LoadingCard, Modal, PageHeader, SegmentedControl, Section, Spinner, StatusIcon, Toolbar, ToolbarSpacer } from '../components/ui';
 import { plural } from '../util';
 import type { SessionSummary } from '../types';
 import { LaunchesSection, RunningGroups } from '../components/session/LiveRows';
 import { SessionListRow } from '../components/session/SessionListRow';
+import { ChatRow, ChatsView } from '../components/session/ChatRows';
 import { ARCHIVED_HINT, BUCKET_TITLE, HARNESS_LABEL, KINDS, groupByBucket, harnessOf, useMedia, useTick, type HarnessId, type SessionKind } from '../components/session/shared';
 import './Sessions.css';
 
-type HarnessFilter = 'all' | HarnessId;
+type HarnessFilter = 'all' | HarnessId | 'claude-ai';
 const STEP = 100;
 
 /** The row glyphs, in the order a list shows them: running states first, then the AI summary's status of past work. */
@@ -73,7 +74,8 @@ export default function Sessions() {
   const phone = useMedia();
   const kind = (KINDS.some((k) => k.value === params.get('kind')) ? params.get('kind') : 'interactive') as SessionKind;
   const project = params.get('project') || '';
-  const harness = (['claude', 'codex', 'gemini'].includes(params.get('harness') || '') ? params.get('harness') : 'all') as HarnessFilter;
+  const harness = (['claude', 'codex', 'gemini', 'claude-ai'].includes(params.get('harness') || '') ? params.get('harness') : 'all') as HarnessFilter;
+  const chatsOnly = harness === 'claude-ai';
   const [q, setQ] = useState(params.get('q') || '');
   const qd = useDebounced(q.trim(), 250);
   const [limit, setLimit] = useState(STEP);
@@ -97,7 +99,8 @@ export default function Sessions() {
   const { data: harnesses } = useHarnesses();
   const live = useLive();
   const others = (harnesses?.harnesses || []).filter((h) => h.id !== 'claude' && h.sessions > 0);
-  const showHarness = others.length > 0 || harness !== 'all';
+  const chatCount = useChats('', 1).data?.status.count || 0; // claude.ai chats: a read-only "assistant"
+  const showHarness = others.length > 0 || chatCount > 0 || harness !== 'all';
 
   const qs = new URLSearchParams({ limit: String(limit) });
   if (kind !== 'all') qs.set('kind', kind);
@@ -189,10 +192,12 @@ export default function Sessions() {
             {HARNESS_LABEL[h]}
           </option>
         ))}
+      {(chatCount > 0 || chatsOnly) && <option value="claude-ai">claude.ai</option>}
     </select>
   ) : null;
 
-  const nothingAtAll = !isLoading && !error && !list.length && !extra.length;
+  const deepChats = harness === 'all' ? (deep.data?.chats || []).filter((c) => !project || c.projects.some((p) => p.id === project)) : [];
+  const nothingAtAll = !isLoading && !error && !list.length && !extra.length && !deepChats.length;
   // "Earlier" folds unless it's all there is or a search is narrowing the list; "Load more" then lives inside it
   // (a folded body is hidden, so the infinite-scroll sentinel doesn't fire behind the fold).
   const earlierFolded = !qd && groups.length > 1 && groups.some((g) => g.key === 'earlier');
@@ -220,8 +225,8 @@ export default function Sessions() {
         {legend && <Legend onClose={() => setLegend(false)} />}
       </PageHeader>
 
-      {running.length > 0 && <RunningGroups live={running} />}
-      <LaunchesSection launches={launches} />
+      {!chatsOnly && running.length > 0 && <RunningGroups live={running} />}
+      {!chatsOnly && <LaunchesSection launches={launches} />}
 
       {phone ? (
         <div className="ss-filters">
@@ -276,9 +281,11 @@ export default function Sessions() {
         </Toolbar>
       )}
 
-      {kind === 'archived' && <div className="hint ss-hint">{ARCHIVED_HINT}</div>}
+      {kind === 'archived' && !chatsOnly && <div className="hint ss-hint">{ARCHIVED_HINT}</div>}
 
-      {isLoading ? (
+      {chatsOnly ? (
+        <ChatsView q={qd} project={project} />
+      ) : isLoading ? (
         <div className="stack-lg">
           <LoadingCard lines={5} />
           <LoadingCard lines={4} />
@@ -328,6 +335,15 @@ export default function Sessions() {
               </Section>
             );
           })}
+          {deepChats.length > 0 && (
+            <Section title="claude.ai chats" count={deepChats.length}>
+              <Card flush>
+                {deepChats.map((c) => (
+                  <ChatRow key={c.uuid} c={c} />
+                ))}
+              </Card>
+            </Section>
+          )}
           {extra.length > 0 && (
             <Section title="Found inside conversations" count={extra.length}>
               <Card flush>

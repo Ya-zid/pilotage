@@ -2,6 +2,7 @@
 // changes anything, and the only programs it runs are `--version` calls (and, on WSL, Windows' `cmd.exe /c ver`).
 // bin/pilotage checks Node.js itself (this file needs it) and passes a few facts it knows better (PATH, autostart).
 import fs from 'node:fs';
+import net from 'node:net';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { VERSION, IS_WSL, OS_NAME, DATA, PORT, WEB_DIST, CLAUDE_BIN, CLAUDE_CMD, CLAUDE_DIR, WIN_HOME, WT_EXE, WIN_NODE } from './config.js';
@@ -37,6 +38,20 @@ function launchMode() {
   }
 }
 
+/** Whether something accepts TCP connections on 127.0.0.1:port. */
+function portTaken(port) {
+  return new Promise((resolve) => {
+    const sock = net.connect({ host: '127.0.0.1', port });
+    const done = (v) => {
+      sock.destroy();
+      resolve(v);
+    };
+    sock.setTimeout(1000, () => done(false));
+    sock.once('connect', () => done(true));
+    sock.once('error', () => done(false));
+  });
+}
+
 /** [{level: 'ok'|'warn'|'fail', text, fix?}] */
 export async function runChecks({ onPath = null, autostart = null, fromNpx = false } = {}) {
   const out = [];
@@ -64,6 +79,9 @@ export async function runChecks({ onPath = null, autostart = null, fromNpx = fal
     const r = await fetch(`http://127.0.0.1:${PORT}/healthz`, { signal: AbortSignal.timeout(2000) });
     health = r.ok ? await r.json().catch(() => ({})) : { other: true };
   } catch {}
+  // No HTTP answer: free port, or a program that accepts connections but isn't a web server (it would make
+  // `pilotage start` fail with "address in use" while doctor said "not running").
+  if (!health && (await portTaken(PORT))) health = { other: true };
   if (health?.app === 'pilotage') ok(`Pilotage is running on port ${PORT} (sign in with: pilotage open)`);
   else if (health) fail(`Port ${PORT} is used by another program`, 'Stop it, or start Pilotage on another port: PILOTAGE_PORT=4757 pilotage start');
   else warn('Pilotage is not running', 'Start it with: pilotage   (it opens in your browser)');

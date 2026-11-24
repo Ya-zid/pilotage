@@ -1,7 +1,7 @@
 // What you can do with a session right now: continue it (live), resume / fork it (not live), or copy the
 // resume command (Codex / Gemini). One primary button in the header (a floating pill on the phone); the rest in ⋯.
 import React from 'react';
-import { Copy, GitFork, Monitor, MoreHorizontal, Play, Smartphone, Square, Terminal } from 'lucide-react';
+import { Copy, GitFork, Monitor, MoreHorizontal, Play, RotateCw, Smartphone, Square, Terminal } from 'lucide-react';
 import { api, terminalPlace, useInvalidate, useTerminal } from '../../api';
 import { useApp } from '../AppContext';
 import { IconButton, useToast } from '../ui';
@@ -142,6 +142,20 @@ export function useSessionActions(s: SessionDetail): ActionSet {
         icon: <GitFork />,
         title: 'Start a new session from this conversation, keeping the original untouched',
         onClick: () => openNewSession({ resumeId: s.id, fork: true }),
+      },
+      {
+        key: 'fresh',
+        label: s.compactions ? `Continue fresh (compacted ${s.compactions}×)` : 'Continue fresh',
+        icon: <RotateCw />,
+        title: 'A new session that starts from a short recap of this one (what was done, the next step, the files), instead of its long or compacted history',
+        onClick: async () => {
+          try {
+            const r = await api<{ prompt: string; projectId: string | null }>(`/api/sessions/${encodeURIComponent(s.id)}/recap`);
+            openNewSession({ projectId: r.projectId || s.projectId || undefined, prompt: r.prompt, aiPrompt: true });
+          } catch {
+            openNewSession({ projectId: s.projectId || undefined, prompt: `Context: an earlier session about “${s.title}”. `, aiPrompt: true });
+          }
+        },
       },
     ],
     note: null,

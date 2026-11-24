@@ -191,6 +191,12 @@ try {
   await shot(d.page, 'tasks-suggested', '/tasks?tab=suggested');
   await shot(d.page, 'project', `/projects/${projectId('saas/invoicely')}`);
   await shot(d.page, 'ideas-possible-projects', '/ideas');
+  // The Map: wait for the layout to draw its nodes and come to rest.
+  const mapReady = async (page) => {
+    await page.waitForSelector('.mp-svg circle, .mp-svg [data-node]', { timeout: 15000 });
+    await page.waitForTimeout(3000);
+  };
+  await shot(d.page, 'map', '/map', { prepare: mapReady });
 
   // The Possible projects section on its own (for scout.png)
   let cards = null;
@@ -218,6 +224,12 @@ try {
   const p = await context(browser, { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, userAgent: PHONE_UA });
   await shot(p.page, 'phone-home', '/');
   const phoneSessions = await shot(p.page, 'phone-sessions', '/sessions');
+  await shot(p.page, 'phone-map', '/map', {
+    prepare: async (page) => {
+      await page.waitForSelector('.mp-svg circle, .mp-svg [data-node]', { timeout: 15000 });
+      await page.waitForTimeout(3000);
+    },
+  });
   await p.ctx.close();
 
   if (!argv.includes('--no-compose')) {

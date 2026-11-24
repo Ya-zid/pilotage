@@ -117,6 +117,7 @@ function fakeRegistry(projects) {
   const map = new Map(projects.map((p) => [p.path, p]));
   return {
     projects: map,
+    known: new Set(),
     byId: (id) => [...map.values()].find((p) => p.id === id) || null,
     projectOfSession: (m) => [...map.values()].find((p) => m.cwd && m.cwd.startsWith(p.path)) || null,
     gitOf: () => ({}),
@@ -619,6 +620,26 @@ test('engine: automatic digests cover recent work only; year-old sessions and se
   assert.ok(engine.pendingBlocks({ manual: true }).some((p) => p.meta.id === 'OLD'), '"Summarize now" still covers it');
   assert.equal(engine.status().pendingBlocks, engine.pendingBlocks().length, 'the "left" count matches what will run');
   assert.ok(!engine.pendingBriefs([]).some((b) => b.project.path === cloned.path), 'no automatic brief for a repo without sessions');
+});
+
+test('engine: automatic project briefs follow the same window; a longer window in Settings reaches older projects', () => {
+  const fx = sessions();
+  const oldTurns = [
+    { t: NOW - 400 * DAY, o: 'h', p: 'Port the old site to Astro', a: 'Done.' },
+    { t: NOW - 400 * DAY + 60e3, o: 'h', p: 'Fix the RSS feed', a: 'Fixed.' },
+  ];
+  fx.turns.OLD = oldTurns;
+  const oldPath = path.join(HOME_DIR, 'old-site');
+  fx.metas.push({ id: 'OLD', cwd: oldPath, startedAt: oldTurns[0].t, lastAt: oldTurns[1].t, lastHumanAt: oldTurns[1].t, turnCount: 2, counts: { h: 2, s: 0 }, entrypoint: 'cli', files: {} });
+  const recent = fakeProject(fx);
+  recent.sessionIds = recent.sessionIds.filter((id) => id !== 'OLD');
+  const old = { id: hash(oldPath, 10), path: oldPath, name: 'old-site', workspace: 'old-site', isGit: false, worktrees: new Map(), sessionIds: ['OLD'], lastAt: oldTurns[1].t, stack: [] };
+  const engine = new AIEngine({ index: fakeIndex(fx), registry: fakeRegistry([recent, old]), store: fakeStore(), live: { get: () => null } });
+  const briefed = () => engine.pendingBriefs([]).map((b) => b.project.name);
+  assert.ok(!briefed().includes('old-site'), 'a project untouched for 400 days gets no automatic brief on a first run');
+  engine.settings.backfillDays = 500;
+  assert.ok(briefed().includes('old-site'), 'a 500-day window reaches it');
+  assert.ok(engine.pendingBlocks().some((p) => p.meta.id === 'OLD'), 'and its sessions');
 });
 
 test('engine: "Pause" is kept in the settings, so a restart does not resume AI work', () => {

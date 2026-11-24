@@ -226,6 +226,15 @@ export function clip(s, n) {
   return s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s;
 }
 
+/** 1234 → "1.2k", 12345678 → "12.3M" (token counts in the CLI and exports). */
+export function compactNum(n) {
+  n = Number(n) || 0;
+  if (n < 1000) return String(n);
+  const [v, unit] = n >= 999.5e6 ? [1e9, 'B'] : n >= 999.5e3 ? [1e6, 'M'] : [1e3, 'k'];
+  const x = n / v;
+  return `${x >= 99.95 ? Math.round(x) : x.toFixed(1).replace(/\.0$/, '')}${unit}`;
+}
+
 export function oneLine(s) {
   return String(s ?? '').replace(/\s+/g, ' ').trim();
 }

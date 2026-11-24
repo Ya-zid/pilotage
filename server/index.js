@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import { execFile } from 'node:child_process';
 import path from 'node:path';
 import QRCode from 'qrcode';
-import { PORT, BIND, LAN_PORT, LAN_INTERNAL_PORT, WEB_DIST, VERSION, ensureDirs, HOME, paths, ROOT, IS_WSL, OS_NAME } from './config.js';
+import { PORT, BIND, LAN_PORT, LAN_INTERNAL_PORT, WEB_DIST, VERSION, ensureDirs, HOME, DATA, paths, ROOT, IS_WSL, OS_NAME } from './config.js';
 import { getStore } from './store.js';
 import { userName, detectedName } from './profile.js';
 import { importLocalWorkspaces } from './workspaces.js';
@@ -20,14 +20,22 @@ import { listDevServers, stopDevServer } from './sources/processes.js';
 import { AIEngine } from './ai/engine.js';
 import { usageNow } from './ai/usage.js';
 import { Views } from './views.js';
-import { launch, getLaunch, listLaunches, attachTerminal, stopBackground, openVSCode, openExplorer, openShell, openUrlOnPC, sanitizeName, terminal, PERMISSION_MODES } from './launch.js';
-import { trustState, trustFolder } from './claude-trust.js';
+import { launch, getLaunch, listLaunches, attachTerminal, stopBackground, openVSCode, openExplorer, openShell, sanitizeName, terminal, PERMISSION_MODES, MODELS, askFirstMode } from './launch.js';
+import { trustState, trustBeforeLaunch as trustForLaunch } from './claude-trust.js';
 import { tilde as tildePath } from './work/spinoff.js';
 import { windowsAddresses, forwarderStatus, ensureForwarder, reviveForwarder, enablePhoneAccess, stopForwarder, phoneAccessStatus, firewallRuleExists, setTrustedSsid, phoneAddresses, phoneUrls, lanConnectionAllowed, lanAllowList, LAN_BIND, LAN_BIND_LABEL, LAN_MODE } from './net.js';
 import { ensureTls, tlsStatus, caCertDer, noteHandshakeFailure } from './tls.js';
 import { log, clip, randomToken, isInside, hash } from './util.js';
+import { acquireInstanceLock } from './instance-lock.js';
 
 ensureDirs();
+{
+  const held = acquireInstanceLock(paths.lock, { port: PORT });
+  if (!held.ok) {
+    log.error(`Pilotage is already running on port ${held.port} with this data folder (${path.dirname(paths.lock)}, pid ${held.pid}). Not starting a second one: stop that one first (pilotage stop, with PILOTAGE_PORT=${held.port}).`);
+    process.exit(1);
+  }
+}
 const store = getStore();
 importLocalWorkspaces(store);
 const secrets = getSecrets();
@@ -255,6 +263,8 @@ route('GET', '/api/bootstrap', async (req, res, { dev, url }) => {
     // terminal: where sessions open (Windows Terminal, Terminal, kitty…); null = background only.
     platform: { wsl: IS_WSL, os: OS_NAME, terminal: terminal()?.label || null },
     home: HOME,
+    // Where Pilotage keeps its state (<clone>/data, ~/.pilotage for an npm install, or PILOTAGE_DATA), for Settings → About.
+    dataDir: tildePath(DATA),
     usage: usageNow(),
     index: index.progress,
     ai: ai.status(),
@@ -356,6 +366,7 @@ route('GET', '/api/sessions', async (req, res, { url }) => {
       liveOnly: url.searchParams.get('live') === '1',
       limit: Math.min(Number(url.searchParams.get('limit')) || 300, 2000),
       includeHidden: url.searchParams.get('hidden') === '1',
+      idPrefix: url.searchParams.get('id') || undefined, // `pilotage resume|export <id prefix>`
     }),
     gen,
   });
@@ -378,6 +389,13 @@ route('PATCH', '/api/sessions/([\\w.-]{8,160})', async (req, res, { m, body }) =
   json(res, views.sessionDetail(m[1]));
 });
 
+// A first prompt for a fresh session that continues a long or compacted one (views.recapPrompt: no AI call).
+route('GET', '/api/sessions/([\\w.-]{8,160})/recap', async (req, res, { m }) => {
+  const prompt = views.recapPrompt(m[1]);
+  if (!prompt) return fail(res, 404, 'Unknown session');
+  const meta = index.get(m[1]);
+  json(res, { prompt, projectId: registry.projectOfSession(meta)?.id || null });
+});
 route('GET', '/api/sessions/([\\w.-]{8,160})/turns', async (req, res, { m, url }) => {
   if (!index.get(m[1])) return fail(res, 404, 'Session not found');
   const before = url.searchParams.get('before');
@@ -456,16 +474,7 @@ route('GET', '/api/trust', async (req, res, { url }) => {
 });
 
 /** Record Claude Code trust for `cwd` when asked (checkbox) or when the setting is on. Never blocks a launch. */
-async function trustBeforeLaunch(cwd, asked, why) {
-  if (!asked && !store.settings.launch.trustFolders) return;
-  try {
-    if (trustState(cwd).trusted) return;
-    const r = await trustFolder(cwd);
-    if (r.changed) log.info(`trust: marked ${tildePath(cwd)} as trusted in Claude Code (${why})`);
-  } catch (e) {
-    log.warn(`trust: could not mark ${tildePath(cwd)} as trusted: ${e.message}`);
-  }
-}
+const trustBeforeLaunch = (cwd, asked, why) => trustForLaunch(cwd, { asked, auto: !!store.settings.launch.trustFolders, why, log, show: tildePath });
 
 route('POST', '/api/launch', async (req, res, { body, dev }) => {
   // A typo must never become "skip all prompts": refuse what isn't a known mode (launch.js also fails closed).
@@ -478,6 +487,8 @@ route('POST', '/api/launch', async (req, res, { body, dev }) => {
     if (!body.name) body.name = views.sessionTitle(t.meta, null);
   }
   const harnessIn = typeof body.harness === 'string' ? body.harness : 'claude';
+  // Same for a mistyped model (`pilotage new --model opsu`): say so instead of silently starting the default one.
+  if (harnessIn === 'claude' && typeof body.model === 'string' && !MODELS.has(body.model)) return fail(res, 400, `Unknown model "${clip(body.model, 40)}": use opus, sonnet, haiku or fable, or leave it out for the default from Settings`);
   if (harnessIn === 'claude') await trustBeforeLaunch(cwd, body.trust === true, body.trust === true ? `asked from ${dev.name}` : 'setting');
   const isPhone = isPhoneUA(req.headers['user-agent']);
   const mode = body.mode === 'terminal' || body.mode === 'background' ? body.mode : isPhone ? store.settings.launch.phoneMode : store.settings.launch.pcMode;
@@ -489,7 +500,8 @@ route('POST', '/api/launch', async (req, res, { body, dev }) => {
     resumeId: body.resumeId || null,
     fork: !!body.fork,
     model: typeof body.model === 'string' ? body.model : store.settings.launch.model,
-    permissionMode: body.permissionMode || store.settings.launch.permissionMode,
+    // aiPrompt: the dialog was filled with AI-written text (Home's focus "Start", a new project's first session).
+    permissionMode: body.aiPrompt === true ? askFirstMode(body.permissionMode || store.settings.launch.permissionMode) : body.permissionMode || store.settings.launch.permissionMode,
     from: dev.name,
     harness: typeof body.harness === 'string' ? body.harness : undefined,
   });
@@ -517,8 +529,9 @@ route('POST', '/api/open', async (req, res, { body }) => {
   let dir = p?.path;
   if (p && body.worktree) dir = p.worktrees.get(body.worktree)?.path || dir;
   try {
-    if (body.what === 'url') await openUrlOnPC(String(body.url || ''));
-    else if (!dir) return fail(res, 400, 'Pick a project');
+    // Folder actions only. (Opening a URL on the PC was removed: no UI used it, and a phone could make the PC open
+    // any link through explorer.exe.)
+    if (!dir) return fail(res, 400, 'Pick a project');
     else if (body.what === 'vscode') await openVSCode(dir);
     else if (body.what === 'explorer') await openExplorer(dir);
     else if (body.what === 'shell') await openShell(dir, p ? store.project(p.path).name || p.name : 'Shell');
@@ -548,7 +561,9 @@ route('GET', '/api/timeline/day/(\\d{4}-\\d{2}-\\d{2})', async (req, res, { m })
 });
 
 route('GET', '/api/search', async (req, res, { url }) => {
-  json(res, views.search(url.searchParams.get('q') || ''));
+  const q = url.searchParams.get('q') || '';
+  // claude.ai chats (routes/chats.js) are searched with the rest
+  json(res, { ...views.search(q), chats: ctx.chats ? ctx.chats.search(q) : [] });
 });
 
 // Home › Pick up: "Not now" hides a row until that session has new activity
@@ -656,6 +671,7 @@ route('PATCH', '/api/settings', async (req, res, { body }) => {
     if (Number.isFinite(s.ai.maxFiveHourPct)) clean.ai.maxFiveHourPct = Math.max(5, Math.min(100, s.ai.maxFiveHourPct));
     if (Number.isFinite(s.ai.maxSevenDayPct)) clean.ai.maxSevenDayPct = Math.max(5, Math.min(100, s.ai.maxSevenDayPct));
     if (Number.isFinite(s.ai.concurrency)) clean.ai.concurrency = Math.max(1, Math.min(4, s.ai.concurrency));
+    if (Number.isFinite(s.ai.backfillDays)) clean.ai.backfillDays = Math.max(1, Math.min(3650, Math.round(s.ai.backfillDays)));
     for (const k of ['maxCallsPer5h', 'maxCallsPerDay']) if (Number.isFinite(s.ai[k])) clean.ai[k] = Math.max(0, Math.min(100000, Math.round(s.ai[k])));
   }
   if (s.launch) {
@@ -810,6 +826,7 @@ const ctx = {
   getProcs: () => procs,
   every: (ms, fn) => every(ms, fn),
   extendOverview: (fn) => overviewExtenders.push(fn),
+  trustBeforeLaunch, // the Settings → Trust folders step, for routes that launch too (task Start)
   log,
 };
 {

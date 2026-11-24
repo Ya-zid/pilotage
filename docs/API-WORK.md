@@ -37,7 +37,8 @@ interface WorkItem {
   detail: string;             // plain text; AI items: the Claude-facing next step (older items may still end with
                               //   "\n\nFrom: “<block title>” — <outcome>" until their source is summarized again)
   who: 'you' | 'claude' | 'waiting' | null; // who does it, as the AI sees it (null = unknown / not from the AI)
-  titleBy: 'short' | null;    // 'short': retitled by the one-time cleanup (server/work/retitle.js); never lengthened again
+  titleBy: 'short' | null;    // 'short': retitled by the one-time cleanup (server/work/retitle.js); never lengthened
+                              //   again while the step is the same work; a different next step takes its new title
   status: WorkStatus;
   priority: 0 | 1 | 2 | 3;    // 0 low, 1 normal, 2 high, 3 urgent (AI never sets 3)
   source: {
@@ -53,13 +54,18 @@ interface WorkItem {
   autoManaged: boolean;       // the extractor may still move it (ai && !userEdited)
   userEdited: boolean;        // set by edits and by Restore (not by moves between open columns); then the AI never changes status/title/detail
   aiStatus: AiStatus;
-  closedBy: 'ai' | 'user' | 'expired' | null; // 'ai' and 'expired' = closed automatically (restorable)
+  closedBy: 'ai' | 'user' | 'expired' | null; // 'ai' and 'expired' = closed automatically (restorable). Untouched
+                              //   AI items closed by 'ai', expiry or "dismiss old" are forgotten 150 days later
   createdAt: number;          // ms epoch, all timestamps
   updatedAt: number;
   sourceAt: number;           // when the evidence was observed (block end / brief time) — use for "3 days ago"
   doneAt: number | null;
   dueAt: number | null;
   startedAt: number | null;
+  plannedFor: string | null;  // 'YYYY-MM-DD': flagged for that day's plan (Home › Today); see below
+  snoozeUntil: number | null; // a snoozed suggestion stays Suggested but hidden until then
+  dismissReason: 'not-a-task' | 'done' | 'duplicate' | 'old' | null; // why the user dismissed it ('old' = dismiss-old)
+  restoredAt: number | null;  // when the user brought it back (expiry counts from here)
   launches: { launchId: string; at: number; mode: 'terminal' | 'background'; sessionId: string | null }[];
 }
 
@@ -140,13 +146,21 @@ AI items leave a tombstone so the extractor never recreates them (or a near-iden
 ### `POST /api/work/:id/start`
 ```ts
 body: { mode?: 'terminal' | 'background' /* default: settings pcMode / phoneMode by device */;
-        resume?: boolean /* resume the source session instead of a new one */; model?: string }
+        resume?: boolean /* resume the source session instead of a new one */; model?: string;
+        trust?: boolean /* record Claude Code's folder trust first (~/.claude.json), as /api/launch */ }
 → { item: WorkItem; launch: LaunchRecord }
 ```
 Starts a Claude session in the item's project with a prompt built from title + detail, sets status `doing` and
-records the launch. It does **not** set `userEdited`: when that launched session's digest later says done, the item
+records the launch. With Settings → Trust folders on (or `trust: true`), the folder is marked trusted in Claude Code
+first, so a background start from the phone does not stall on "trust this folder?". A suggested task (`ai: true`)
+starts in "Ask every time" mode whatever Settings says (its text was written by the AI from transcripts); "Plan
+first" is kept. It does **not** set `userEdited`: when that launched session's digest later says done, the item
 closes itself. Errors: 404, 400 (project gone / source transcript gone with `resume`), 409 (source session already
 live with `resume`), 500 (launch failed). Poll `GET /api/launch/:launchId` for the phone link like the New-session dialog.
+
+### Today's plan and triage
+`POST /api/work/:id/today`, `POST /api/work/:id/dismiss`, `POST /api/work/dismiss-old`, `POST /api/work/restore` and
+`POST /api/plan/focus/:key` (server/routes/plan.js) are described in [SIMPLIFY.md](SIMPLIFY.md) (§10, server contract).
 
 ### `GET /api/spinoffs?project=`
 `project` matches either side (`from` or `to`). → `{ spinoffs: Spinoff[] }` newest first.
@@ -158,20 +172,30 @@ body: { fromProjectId: string; fromSessionId?: string; threadName?: string /* ex
         name: string; goal?: string /* strongly suggested; a default is derived */; parentDir?: string /* abs or '~/…' */;
         workspace?: string | null /* default: the source's workspace; null/'' = its own */;
         gitInit?: boolean; launch?: 'terminal' | 'background' | null; model?: string;
-        useAI?: boolean /* default true; false = deterministic CLAUDE.md, instant */; dryRun?: boolean }
+        useAI?: boolean /* default true; false = deterministic CLAUDE.md, instant */; dryRun?: boolean;
+        trust?: boolean /* also mark the new folder trusted in Claude Code (writes ~/.claude.json); the default is
+                           Settings → Trust folders */;
+        scoutId?: string /* 12-hex project-scout candidate behind it: its text feeds the handoff, and it is marked
+                            accepted once the folder exists (out.scout); unknown ids are ignored */ }
 → CreatedProject
-→ (dryRun) { ok: true; dryRun: true; path; displayPath; slug; parent; insideRepo: string | null; workspace; goal;
+→ (dryRun) { ok: true; dryRun: true; path; displayPath; slug; parent; newParent: string | null /* first folder that
+             gets created along with it */; insideRepo: string | null; workspace; goal;
              source: { projectId; name; session: {id,title} | null; thread: {name,summary} | null; blocks: number; files: number } }
 ```
 - Folder = `parentDir || <folder holding the source's top-level workspace folder>` + `/` + slug(name)
-  (e.g. `~/acme/outreach` → `~/whatsapp-module`). Slug is `a-z0-9-`, max 60.
+  (e.g. `~/acme/outreach` → `~/whatsapp-module`). Slug: lowercase letters and digits of any script (Latin accents
+  dropped: `Été café` → `ete-cafe`, `Проект` → `проект`) joined by `-`, max 60. Missing parent folders (up to 6) are
+  created with it. Paths are spelled from `$HOME` as the server sees it, even when it is a symlink.
 - CLAUDE.md sections: Goal, Background, Relevant files in the source project, Open questions, First steps
   (+ a short working agreement). One Haiku call through the AI queue; if AI is off/busy/fails it falls back to a
   template from the same data (`claudeMd.generatedBy` tells which; `aiError` says why). **The call can take 10–60 s
   with AI** — show progress, and do a `dryRun` first to show the target path.
-- Starter tasks go into the new project (`items`). With AI: the first steps; template: one "Plan the first version" task.
+- Starter tasks go into the new project (`items`): with AI, its 1-2 to-dos for the user (or one "Plan the first
+  version of …" task when it has none); template: that one planning task. The first steps are Claude's: they go into
+  CLAUDE.md only.
 - With `launch`, a session starts in the new folder with a kickoff prompt (read CLAUDE.md, summarize the plan, wait for
-  the user's go before big changes).
+  the user's go before big changes). It asks before acting whatever Settings says: CLAUDE.md is made from AI
+  summaries, and its Background section says it is unverified context.
 - Errors (all before anything is written): 400 bad name / not inside `$HOME` / `..` / relative path / missing parent /
   forbidden place (`~/.claude`, `~/.ssh`, `~/.config`, Pilotage itself…) / parent inside another git repo without
   `gitInit` / thread not found / session from another project / bad `launch`; 404 project or session; **409 folder
@@ -182,8 +206,9 @@ body: { fromProjectId: string; fromSessionId?: string; threadName?: string /* ex
 ```ts
 body: { name: string; goal?: string /* required unless fromIdeaId */; workspace?: string /* key, e.g. 'acme' */;
         parentDir?: string /* default ~ */; fromIdeaId?: string; gitInit?: boolean;
-        launch?: 'terminal' | 'background' | null; model?: string; useAI?: boolean; dryRun?: boolean }
-→ CreatedProject      (dryRun → { ok, dryRun, path, displayPath, slug, parent, insideRepo, workspace, goal, related: string[] })
+        launch?: 'terminal' | 'background' | null; model?: string; useAI?: boolean; dryRun?: boolean;
+        trust?: boolean; scoutId?: string /* as for /api/spinoff; a saved scout idea brings its own scoutId */ }
+→ CreatedProject      (dryRun → { ok, dryRun, path, displayPath, slug, parent, newParent, insideRepo, workspace, goal, related: string[] })
 ```
 Same safety rules, no source project. With `workspace`, the other projects of that workspace (their briefs) are used
 as background, and the new project is grouped under it. With `fromIdeaId`, the idea is marked done and linked

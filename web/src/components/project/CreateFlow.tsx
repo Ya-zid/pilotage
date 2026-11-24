@@ -7,7 +7,8 @@ import type { CreatedProject } from '../../types-extra';
 import { Button, Callout, Field, SegmentedControl, Spinner, Switch } from '../ui';
 import { plural } from '../../util';
 import { LaunchStatus } from './LaunchStatus';
-import { terminalPlace, useTerminal } from '../../api';
+import { terminalPlace, useSettings, useTerminal } from '../../api';
+import { TrustFolderCheck } from '../NewSession';
 import { errMsg, request, RequestError, useDebounced, type WorkspaceOption } from './lib';
 
 export type DryRun = {
@@ -115,8 +116,11 @@ export function WorkspaceSelect({ id, value, onChange, options, noneLabel = 'No 
 }
 
 /** Git init + launch + AI hand-off options, shared by both dialogs. */
-export function CreateOptions({ gitInit, setGitInit, launch, setLaunch, useAI, setUseAI }: { gitInit: boolean; setGitInit: (v: boolean) => void; launch: LaunchChoice; setLaunch: (v: LaunchChoice) => void; useAI: boolean; setUseAI: (v: boolean) => void }) {
+export function CreateOptions({ gitInit, setGitInit, launch, setLaunch, useAI, setUseAI, trust, setTrust }: { gitInit: boolean; setGitInit: (v: boolean) => void; launch: LaunchChoice; setLaunch: (v: LaunchChoice) => void; useAI: boolean; setUseAI: (v: boolean) => void; trust: boolean; setTrust: (v: boolean) => void }) {
   const term = useTerminal();
+  const { data: settings } = useSettings();
+  // A new folder is never trusted yet: without an answer at the PC, a session started from the phone just waits.
+  const askTrust = launch !== 'none' && !settings?.settings.launch.trustFolders;
   return (
     <>
       <div className="pj-setting">
@@ -133,7 +137,7 @@ export function CreateOptions({ gitInit, setGitInit, launch, setLaunch, useAI, s
         </div>
         <Switch on={useAI} onChange={setUseAI} label="Write CLAUDE.md with AI" />
       </div>
-      <Field label="Start a session in it">
+      <Field label="Start a session in it" hint={launch !== 'none' ? 'It asks before acting, whatever Settings says: its first read is a CLAUDE.md made from AI summaries of your sessions.' : undefined}>
         <SegmentedControl
           value={!term && launch === 'terminal' ? 'background' : launch}
           onChange={setLaunch}
@@ -147,6 +151,7 @@ export function CreateOptions({ gitInit, setGitInit, launch, setLaunch, useAI, s
           ]}
         />
       </Field>
+      {askTrust && <TrustFolderCheck checked={trust} onChange={setTrust} hint="Claude asks this once per new folder, on the PC, and the session waits until someone answers there. Pilotage makes this folder and writes only CLAUDE.md in it." />}
     </>
   );
 }

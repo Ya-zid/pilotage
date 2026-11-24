@@ -7,6 +7,74 @@ minor versions.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-24
+
+Features for people who run many sessions at once, a Map of all your work, your claude.ai chats next to your
+Claude Code sessions, new terminal commands, and the remaining fixes from the overnight audit.
+
+### Added
+
+- **Map** (sidebar; More on the phone; `/map`): a mind map of your work: workspaces, projects, workstreams, topics
+  your sessions share, recent sessions, ideas, open tasks, files several sessions edited and your claude.ai chats.
+  Drag, wheel or pinch to move and zoom; click anything for its links and the fitting action (open, New session,
+  Resume, Open in claude.ai); search to highlight and centre; "Focus on this"; type chips; period and project
+  filters; keyboard access. "See on the map" in a project's ⋯ menu. Built from what Pilotage already knows, with no
+  AI call. `GET /api/graph` (docs/API-GRAPH.md).
+- **claude.ai chats**: import claude.ai's official data export (Settings → Sources, on the PC: the zip, its folder or
+  `conversations.json`). Chats show on the Map linked to the projects they mention, in Sessions (read-only, "Open in
+  claude.ai") and in search. Only a compact, redacted index is kept; the import runs in its own process with a
+  memory cap (docs/API-CHATS.md).
+- **Many sessions at once**: the tab title counts sessions waiting for you, with an optional desktop notification
+  when one starts waiting (Settings → General); Home warns when running sessions in the same checkout edit the same
+  files; **Continue fresh** starts a new session from a recap of a long, often-compacted one.
+- **New commands**: `pilotage standup` (what you did, per project, ready to paste), `pilotage sessions`,
+  `pilotage resume <project | id>`, `pilotage export <id>` (a session as markdown) and `pilotage usage` (tokens per
+  project and day). Sessions and projects show a Tokens line (docs/API-REPORTS.md).
+- Settings → AI → "Summarize automatically: the last N days" (was only in `state.json`).
+- New project, Spin off and task Start offer an unticked "Trust this folder".
+
+### Changed
+
+- Sessions seeded by AI-written text (a suggested task's Start, Home's focus, a new project's kickoff and first
+  session, Continue fresh) ask before acting whatever Settings says ("Plan first" is kept); a new project's
+  CLAUDE.md marks its background as unverified context.
+- Output token counts are the real ones (a reply written as several transcript lines was counted several times);
+  forked sessions count only their own prompts, blocks and tokens.
+- Automatic project briefs follow the same 30-day window as summaries.
+- One server per data folder: a second one refuses to start and says where the first runs.
+- `pilotage new` uses the Settings model unless `--model` is given; an unknown model is refused.
+- The package says it runs on Linux and macOS (Windows: use WSL); npm refuses it on Windows itself.
+- `POST /api/open` no longer opens URLs on the PC (nothing used it; phones could reach it).
+- Old expired or dismissed suggestions are forgotten after 150 days.
+- Phone access: the firewall rule follows the network the PC is on (Windows' LocalSubnet plus VPN ranges); a VPN
+  address counts as VPN only when it arrives on a VPN adapter (NetBird, Tailscale, WireGuard `wg<N>`, ZeroTier).
+- An upgrade restarts the phone forwarder once, when its code changed (the old one serves until the new one can
+  start).
+- CLI errors are plain text when not on a terminal.
+
+### Fixed
+
+- Uninstall stops the `pilotage run` supervisor first; the WSL autostart and shortcut quote the install path; the
+  Desktop shortcut goes on the Desktop Windows shows (OneDrive); WSL without autostart says to keep the window open.
+- Projects Pilotage creates are registered wherever they are, and their starter task can start; task Start honours
+  "Trust folders automatically".
+- A shortened task title follows when its block's next step changes.
+- Indexing: `\\wsl.localhost\<distro>` session folders map to their Linux path; a read error mid-append doesn't
+  double-count on retry; Codex rollouts and `history.jsonl` are read from where the last scan stopped, and a line
+  written during a read is picked up next time.
+- Git 2.8-2.25: repo status works again (filters are still checked safely); older git says it's too old.
+- `pilotage doctor` names a port held by another program; `pilotage export --out` writes relative paths where you
+  ran it; a stale server lock whose pid another program took over no longer blocks the start.
+- Web: dialogs manage focus (in, Tab kept inside, back on close); Markdown images show as their alt text; dev-server
+  ports are plain text on the phone; About shows the data folder; "Make it a project" keeps its success screen;
+  "Start a project" shows its path before Create.
+
+### Security
+
+- Codex as the AI provider: SECURITY.md and Settings say plainly that Codex's read-only sandbox can still read files
+  (Codex has no switch that removes its shell); keep Claude Code as the provider if that matters.
+- Leak scan: file names, more token formats, and the packed package itself.
+
 ## [0.4.2] - 2026-11-24
 
 ### Fixed
@@ -27,6 +95,7 @@ minor versions.
 - Other open devices refresh when coding tools are turned on or off; an open tool-call list on a working session
   updates; Home no longer polls the network status.
 - The phone forwarder's restart backoff also covers a forwarder that dies right after starting.
+- macOS: Pilotage's own AI calls stay out of the sessions list whatever temp folder they ran in.
 
 ## [0.4.1] - 2026-11-24
 

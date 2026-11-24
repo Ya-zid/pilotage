@@ -5,7 +5,7 @@ import { useOverview } from '../api';
 import { liveState } from '../components/cards';
 import { Button, Card, EmptyState, PageHeader, Skeleton } from '../components/ui';
 import { CatchingUp, HomeUndoToast, sortLive } from '../components/today/TodayBits';
-import { HomeHeader, NeedsYou, PhoneSetup, PickUp, PulseTiles, Running, TodayPlan, Welcome, homeTitle, useUserName } from '../components/today/HomeSections';
+import { Collisions, HomeHeader, NeedsYou, PhoneSetup, PickUp, PulseTiles, Running, TodayPlan, Welcome, homeTitle, useUserName } from '../components/today/HomeSections';
 import { TaskUndoToast } from '../components/tasks/TaskBits';
 import { friendly, useMedia, useTick } from '../components/tasks/model';
 import './Today.css';
@@ -61,6 +61,7 @@ export default function Today() {
       <HomeHeader />
       {fresh ? <Welcome phone={phone} /> : <PulseTiles o={o} needs={needs.length} working={working.length} />}
       <CatchingUp o={o} />
+      <Collisions items={o.attention.filter((a) => a.kind === 'collision')} />
       {!phone && <PhoneSetup />}
       <NeedsYou list={needs} />
       <Running working={working} idle={idle} />

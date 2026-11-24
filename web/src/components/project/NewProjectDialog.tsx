@@ -18,6 +18,7 @@ export function NewProjectDialog({ onClose, defaultWorkspace = '', prefill, note
   const [gitInit, setGitInit] = useState(true);
   const [useAI, setUseAI] = useState(true);
   const [launch, setLaunch] = useState<LaunchChoice>(phone ? 'background' : 'terminal');
+  const [trust, setTrust] = useState(false); // never pre-ticked
   const [phase, setPhase] = useState<'form' | 'creating' | 'done'>('form');
   const [result, setResult] = useState<CreatedProject | null>(null);
 
@@ -30,7 +31,7 @@ export function NewProjectDialog({ onClose, defaultWorkspace = '', prefill, note
     if (!body) return;
     setPhase('creating');
     try {
-      const r = await request<CreatedProject>('/api/projects/new', { method: 'POST', body: { ...body, goal: goal.trim(), launch: launch === 'none' ? null : launch, useAI, ...(prefill?.scoutId ? { scoutId: prefill.scoutId } : {}) } });
+      const r = await request<CreatedProject>('/api/projects/new', { method: 'POST', body: { ...body, goal: goal.trim(), launch: launch === 'none' ? null : launch, useAI, trust: launch !== 'none' && trust, ...(prefill?.scoutId ? { scoutId: prefill.scoutId } : {}) } });
       setResult(r);
       setPhase('done');
       inv('projects', 'work', 'spinoffs', 'live', 'overview');
@@ -95,7 +96,7 @@ export function NewProjectDialog({ onClose, defaultWorkspace = '', prefill, note
                 </div>
               )}
             </PlanPreview>
-            <CreateOptions gitInit={gitInit} setGitInit={setGitInit} launch={launch} setLaunch={setLaunch} useAI={useAI} setUseAI={setUseAI} />
+            <CreateOptions gitInit={gitInit} setGitInit={setGitInit} launch={launch} setLaunch={setLaunch} useAI={useAI} setUseAI={setUseAI} trust={trust} setTrust={setTrust} />
             <ScoutOrigin prefill={prefill} />
           </>
         )}

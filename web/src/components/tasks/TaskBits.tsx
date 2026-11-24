@@ -2,10 +2,11 @@
 // Follows docs/DESIGN.md: status = glyph, metadata = <Meta>, one primary line, tokens only (tasks.css).
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { Bot, Check, Cloud, CornerDownRight, Hourglass, Monitor, MoreHorizontal, Play, RotateCcw, Sparkles, Sun, SunDim, Trash2, Undo2, User, X } from 'lucide-react';
-import { terminalPlace, useBootstrap, useProjects, useTerminal } from '../../api';
-import { SkipPromptsNote } from '../NewSession';
+import { api, terminalPlace, useBootstrap, useProjects, useTerminal } from '../../api';
+import { AiPromptNote, SkipPromptsNote, TrustFolderCheck } from '../NewSession';
 import { LaunchStatus } from '../project/LaunchStatus';
 import { Button, IconButton, Meta, Modal, ProjectGlyph, SegmentedControl, StatusIcon, Switch } from '../ui';
 import type { Launch, ProjectSummary } from '../../types';
@@ -651,6 +652,16 @@ export function TaskSheet({ it, onClose }: { it: WorkItem; onClose: () => void }
     (!term ? 'background' : (phone ? boot?.settings.launch.phoneMode : boot?.settings.launch.pcMode) || (phone ? 'background' : 'terminal')) as 'terminal' | 'background',
   );
   const [resume, setResume] = useState(false);
+  // Claude Code's "trust this folder?" for where the session starts (asked at the PC; see NewSession).
+  const trustTarget = { projectId: it.projectId, worktree: '', resumeId: resume && it.source.sessionId ? it.source.sessionId : '' };
+  const { data: trustInfo } = useQuery({
+    queryKey: ['trust', trustTarget],
+    queryFn: () => api<{ trusted: boolean; home: boolean; auto: boolean }>(`/api/trust?${new URLSearchParams(trustTarget)}`),
+    enabled: stage === 'start' && !!it.projectId,
+    staleTime: 30_000,
+  });
+  const askTrust = !!trustInfo && !trustInfo.trusted && !trustInfo.home && !trustInfo.auto;
+  const [trustTick, setTrustTick] = useState(false); // never pre-ticked
   const [busy, setBusy] = useState(false);
   const [launch, setLaunch] = useState<Launch | null>(null);
   const closed = it.status === 'done' || it.status === 'dropped';
@@ -663,7 +674,7 @@ export function TaskSheet({ it, onClose }: { it: WorkItem; onClose: () => void }
 
   const doStart = async () => {
     setBusy(true);
-    const r = await start(it.id, mode, resume);
+    const r = await start(it.id, mode, resume, askTrust && trustTick);
     setBusy(false);
     if (r) {
       setLaunch(r.launch as unknown as Launch);
@@ -849,7 +860,9 @@ export function TaskSheet({ it, onClose }: { it: WorkItem; onClose: () => void }
               <div className="medium">{it.title}</div>
               <div className="tiny faint">Claude gets the title and details as its first prompt, and is asked to check in before anything risky.</div>
             </div>
-            {boot?.settings.launch.permissionMode === 'bypassPermissions' && <SkipPromptsNote />}
+            {/* A suggested task's text came from the AI: the server starts it asking first (routes/work.js). */}
+            {it.ai ? <AiPromptNote /> : boot?.settings.launch.permissionMode === 'bypassPermissions' && <SkipPromptsNote />}
+            {askTrust && <TrustFolderCheck checked={trustTick} onChange={setTrustTick} />}
             {term && (
               <div className="field">
                 <label>Where</label>

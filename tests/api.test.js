@@ -81,6 +81,11 @@ test('not-paired re-check: a paired device gets bootstrap, so the page reloads i
   assert.notEqual((await get('/')).status, 401); // the app shell (200), or 503 when web/dist isn't built (CI)
 });
 
+test('bootstrap names the real data folder (Settings → About used to say ~/pilotage/data for every install)', async () => {
+  const b = await (await get('/api/bootstrap')).json();
+  assert.equal(b.dataDir, DATA, 'PILOTAGE_DATA, as the server uses it');
+});
+
 test('DNS rebinding and CSRF protections', async () => {
   const status = await new Promise((resolve, reject) => {
     const req = http.request({ host: '127.0.0.1', port: PORT, path: '/api/overview', headers: { host: 'evil.example', cookie } }, (res) => {
@@ -245,4 +250,120 @@ test('PILOTAGE_NO_AI=1 means no AI call at all, not even Settings → AI → Tes
   assert.equal(j.ok, false);
   assert.match(j.error, /PILOTAGE_NO_AI/);
   assert.equal(fs.existsSync(AI_CALLED), false, 'claude -p was started');
+});
+
+test('POST /api/open no longer opens URLs on the PC (no UI used it; phones could reach it)', async (t) => {
+  // Its own server on plain Linux, with stand-in openers first on PATH: nothing real ever opens.
+  const data = fs.mkdtempSync(path.join(os.tmpdir(), 'pilotage-api-open-'));
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'pilotage-api-open-bin-'));
+  const opened = path.join(bin, 'opened');
+  for (const name of ['xdg-open', 'open']) fs.writeFileSync(path.join(bin, name), `#!/bin/sh\necho "$*" >> '${opened}'\n`, { mode: 0o755 });
+  // Its own range: PORT + 300 landed in reports.test.js's ports (5160-5239), and node --test runs files in parallel.
+  const port = 5401 + 2 * Math.floor(Math.random() * 40);
+  const p = spawn(process.execPath, ['server/index.js'], { env: { ...process.env, PATH: `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin`, HOME: FAKE_HOME, PILOTAGE_WSL: '0', PILOTAGE_DATA: data, PILOTAGE_PORT: String(port), PILOTAGE_LAN_INTERNAL_PORT: String(port - 1), PILOTAGE_NO_AI: '1', PILOTAGE_NO_FORWARDER: '1' }, stdio: 'ignore' });
+  t.after(() => p.kill('SIGKILL'));
+  let up = false;
+  for (let i = 0; i < 80 && !up; i++) {
+    await new Promise((r) => setTimeout(r, 250));
+    up = await fetch(`http://127.0.0.1:${port}/healthz`).then((r) => r.ok, () => false);
+  }
+  assert.ok(up, 'server did not start');
+  const k = JSON.parse(fs.readFileSync(path.join(data, 'secrets.json'), 'utf8')).desktopKey;
+  const r = await fetch(`http://127.0.0.1:${port}/api/open`, { method: 'POST', headers: { 'X-Pilotage-Key': k, 'X-Pilotage': '1', 'Content-Type': 'application/json' }, body: JSON.stringify({ what: 'url', url: 'https://example.com/' }) });
+  assert.equal(r.status, 400);
+  await new Promise((r2) => setTimeout(r2, 300));
+  assert.equal(fs.existsSync(opened), false, 'an opener ran');
+});
+
+test('a project Pilotage creates deep down (or in a dot-folder) is registered, and its starter task can be started', async () => {
+  for (const parentDir of ['~/clients/2026/q4/tools', '~/.work']) {
+    const r = await post('/api/projects/new', { name: `Deep tool ${parentDir.length}`, goal: 'Try the deep folder.', parentDir, useAI: false });
+    assert.equal(r.status, 200, parentDir);
+    const out = await r.json();
+    assert.equal(out.project.registered, true, `${parentDir}: not registered`);
+    assert.ok(out.items.length >= 1);
+    const projects = (await (await get('/api/projects?hidden=1')).json()).projects;
+    assert.ok(projects.some((p) => p.id === out.project.id && p.name === out.project.name), `${parentDir}: not listed under its name`);
+    // Starting the starter task gets past the "folder not known" check (the stand-in claude then can't background).
+    const s = await post(`/api/work/${out.items[0].id}/start`, { mode: 'background' });
+    const err = s.status === 200 ? '' : (await s.json()).error;
+    assert.doesNotMatch(err, /not known to Pilotage/, parentDir);
+    assert.notEqual(s.status, 400, `${parentDir}: ${err}`);
+  }
+});
+
+test('task Start records Claude Code trust for the folder when Settings → Trust folders is on, or when asked', async (t) => {
+  const cfg = path.join(FAKE_HOME, '.claude.json'); // the stand-in Claude Code's settings, in the fake home
+  const patch = (trustFolders) => fetch(`${base}/api/settings`, { method: 'PATCH', headers: { cookie, 'X-Pilotage': '1', 'Content-Type': 'application/json' }, body: JSON.stringify({ settings: { launch: { trustFolders } } }) });
+  t.after(async () => {
+    await patch(false);
+    fs.rmSync(cfg, { force: true });
+  });
+  const shopPath = path.join(FAKE_HOME, 'acme', 'shop');
+  const shop = (await (await get('/api/projects?hidden=1')).json()).projects.find((p) => p.path === shopPath);
+  assert.ok(shop);
+  const item = await (await post('/api/work', { projectId: shop.id, title: 'Check the shop footer' })).json();
+  const trusted = () => JSON.parse(fs.readFileSync(cfg, 'utf8')).projects?.[shopPath]?.hasTrustDialogAccepted === true;
+  for (const [setting, body, want] of [[true, {}, true], [false, { trust: true }, true], [false, {}, false]]) {
+    fs.writeFileSync(cfg, JSON.stringify({ projects: {} }));
+    assert.equal((await patch(setting)).status, 200);
+    await post(`/api/work/${item.id}/start`, { mode: 'background', ...body }); // the stand-in claude can't start it: only the trust step matters
+    assert.equal(trusted(), want, `trustFolders=${setting} ${JSON.stringify(body)}`);
+  }
+});
+
+test('the Map: GET /api/graph needs a paired device or the CLI key and checks its parameters', async () => {
+  assert.equal((await fetch(`${base}/api/graph`)).status, 401);
+  let shop = null;
+  for (let i = 0; i < 60 && !shop; i++) {
+    const g = await (await get('/api/graph?days=0')).json();
+    assert.ok(Array.isArray(g.nodes) && Array.isArray(g.links));
+    shop = g.nodes.find((n) => n.type === 'project' && n.label === 'shop');
+    if (shop) {
+      // Other tests add workspaces (~/clients, ~/.work): look for shop's own link.
+      const ws = new Set(g.nodes.filter((n) => n.type === 'workspace').map((n) => n.id));
+      assert.ok(g.links.some((l) => ws.has(l.source) && l.target === shop.id && l.kind === 'workspace'), 'workspace → project');
+    } else await new Promise((r) => setTimeout(r, 500));
+  }
+  assert.ok(shop, 'the fake project is on the map');
+  assert.equal((await get('/api/graph?days=12')).status, 400);
+  assert.equal((await get('/api/graph?project=..%2Fx')).status, 400);
+  assert.equal((await get('/api/graph?project=0123456789')).status, 404);
+  const one = await get(`/api/graph?days=0&project=${shop.projectId}`);
+  assert.equal(one.status, 200);
+  assert.ok((await one.json()).nodes.some((n) => n.id === shop.id));
+  assert.equal((await fetch(`${base}/api/graph?days=7`, { headers: { 'X-Pilotage-Key': key } })).status, 200);
+  assert.equal((await post('/api/graph', {})).status, 404, 'read-only');
+});
+
+test('claude.ai chats: import from the PC only, then listed, searched and on the map; remove forgets them', async () => {
+  const dir = path.join(FAKE_HOME, 'Downloads', 'claude-export');
+  fs.mkdirSync(dir, { recursive: true });
+  const conv = [{ uuid: 'abcdef01-2345-4678-9abc-def012345678', name: 'Shop pricing ideas', created_at: '2026-11-01T10:00:00Z', updated_at: '2026-11-02T10:00:00Z', chat_messages: [{ sender: 'human', text: 'Coupons for the shop?' }, { sender: 'assistant', text: 'Yes.' }] }];
+  fs.writeFileSync(path.join(dir, 'conversations.json'), JSON.stringify(conv));
+  const body = JSON.stringify({ path: '~/Downloads/claude-export' });
+  const h = { cookie, 'X-Pilotage': '1', 'Content-Type': 'application/json' };
+  assert.equal((await lanRequest('/api/chats/import', { method: 'POST', headers: h, body })).status, 403, 'not from the phone');
+  assert.equal((await lanRequest('/api/chats', { method: 'DELETE', headers: { cookie, 'X-Pilotage': '1' } })).status, 403);
+  const bad = await post('/api/chats/import', { path: path.join(FAKE_HOME, 'acme') });
+  assert.equal(bad.status, 400);
+  assert.match((await bad.json()).error, /No conversations\.json/);
+  const r = await post('/api/chats/import', { path: '~/Downloads/claude-export' });
+  assert.equal(r.status, 200);
+  const j = await r.json();
+  assert.equal(j.count, 1);
+  assert.equal(j.linked, 1, '"shop" is a project in the fake home');
+  const list = await (await lanRequest('/api/chats', { headers: { cookie } })).body;
+  const chats = JSON.parse(list);
+  assert.equal(chats.chats[0].url, 'https://claude.ai/chat/abcdef01-2345-4678-9abc-def012345678', 'the phone can read them');
+  assert.equal(chats.chats[0].projects[0].name, 'shop');
+  const s = await (await get('/api/search?q=coupons')).json();
+  assert.equal(s.chats.length, 1);
+  const g = await (await get('/api/graph?days=0')).json();
+  const node = g.nodes.find((n) => n.type === 'chat');
+  assert.ok(node && g.links.some((l) => l.source === node.id && l.kind === 'chat'));
+  const del = await fetch(`${base}/api/chats`, { method: 'DELETE', headers: { cookie, 'X-Pilotage': '1' } });
+  assert.equal(del.status, 200);
+  assert.equal((await (await get('/api/chats')).json()).chats.length, 0);
+  assert.ok(!(await (await get('/api/graph?days=0')).json()).nodes.some((n) => n.type === 'chat'), 'the map forgets them too');
 });

@@ -12,7 +12,8 @@ import { plural } from '../../util';
 import { IdeaX, errMsg, postRaw, suggestName } from './shared';
 
 type DryRun = { ok: true; dryRun: true; path: string; displayPath: string; slug: string; parent: string; newParent?: string | null; insideRepo: string | null; workspace: string | null; goal: string; related: string[] };
-type Preview = { state: 'idle' } | { state: 'loading' } | { state: 'ok'; d: DryRun } | { state: 'error'; msg: string; suggestion?: string | null };
+// `key`: the inputs that dry run was for. Create waits until it matches what is typed now (you see the path first).
+type Preview = { state: 'idle' } | { state: 'loading' } | { state: 'ok'; d: DryRun; key: string } | { state: 'error'; msg: string; suggestion?: string | null };
 
 export function NewProjectDialog({ idea, projects, onClose }: { idea: IdeaX; projects: ProjectSummary[] | undefined; onClose: () => void }) {
   const toast = useToast();
@@ -41,6 +42,8 @@ export function NewProjectDialog({ idea, projects, onClose }: { idea: IdeaX; pro
     return [...m.entries()].sort((a, b) => b[1].n - a[1].n);
   }, [projects]);
 
+  const planKey = JSON.stringify([name.trim(), goal.trim(), ws, gitInit, parentDir.trim()]);
+  const ready = preview.state === 'ok' && preview.key === planKey;
   const body = (dryRun: boolean) => ({
     fromIdeaId: idea.id,
     name: name.trim(),
@@ -61,12 +64,13 @@ export function NewProjectDialog({ idea, projects, onClose }: { idea: IdeaX; pro
       return;
     }
     const n = ++seq.current;
-    setPreview((p) => (p.state === 'ok' ? p : { state: 'loading' }));
+    const key = planKey;
+    setPreview((p) => (p.state === 'ok' ? p : { state: 'loading' })); // the last path stays shown, but not ready
     const t = setTimeout(async () => {
       try {
         const r = await postRaw<DryRun>('/api/projects/new', body(true));
         if (n !== seq.current) return;
-        if (r.ok) setPreview({ state: 'ok', d: r.data });
+        if (r.ok) setPreview({ state: 'ok', d: r.data, key });
         else setPreview({ state: 'error', msg: r.data.error || `Error ${r.status}`, suggestion: r.status === 409 ? r.data.suggestion : null });
       } catch (e) {
         if (n === seq.current) setPreview({ state: 'error', msg: errMsg(e) });
@@ -76,7 +80,7 @@ export function NewProjectDialog({ idea, projects, onClose }: { idea: IdeaX; pro
   }, [name, goal, ws, gitInit, parentDir, created]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const create = async () => {
-    if (preview.state !== 'ok' || creating) return;
+    if (!ready || creating) return;
     setCreating(true);
     try {
       const r = await postRaw<CreatedProject>('/api/projects/new', body(false));
@@ -124,7 +128,7 @@ export function NewProjectDialog({ idea, projects, onClose }: { idea: IdeaX; pro
                 icon={<Play />}
                 onClick={() => {
                   onClose();
-                  openNewSession({ projectId: p.id, prompt: 'Read CLAUDE.md, summarize the plan, and wait for my go before big changes.', title: 'First session' });
+                  openNewSession({ projectId: p.id, prompt: 'Read CLAUDE.md, summarize the plan, and wait for my go before big changes.', title: 'First session', aiPrompt: true });
                 }}
               >
                 Start first session
@@ -148,7 +152,7 @@ export function NewProjectDialog({ idea, projects, onClose }: { idea: IdeaX; pro
           <Button variant="ghost" onClick={onClose} disabled={creating}>
             Cancel
           </Button>
-          <Button variant="primary" icon={<FolderPlus />} loading={creating} disabled={preview.state !== 'ok'} onClick={create}>
+          <Button variant="primary" icon={<FolderPlus />} loading={creating} disabled={!ready} onClick={create}>
             {creating ? 'Creating…' : 'Create project'}
           </Button>
         </>
@@ -232,6 +236,7 @@ export function NewProjectDialog({ idea, projects, onClose }: { idea: IdeaX; pro
                 <FolderPlus size={15} className="faint" aria-hidden="true" />
                 <span className="mono">{preview.d.displayPath}</span>
                 <span className="tiny faint">{preview.d.newParent ? `new folders from ${preview.d.newParent}` : 'new folder'}</span>
+                {!ready && <Spinner size={13} />}
               </div>
               {preview.d.insideRepo && <div className="small tone-amber">Inside the git repo {preview.d.insideRepo}; it gets its own repository.</div>}
               {preview.d.related.length > 0 && (

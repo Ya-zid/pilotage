@@ -2,7 +2,7 @@
 // while the user's own sessions are committing.
 import fs from 'node:fs';
 import path from 'node:path';
-import { run, pLimit, clip } from '../util.js';
+import { run, pLimit, clip, isInside } from '../util.js';
 import { IS_WSL } from '../config.js';
 import { winToWsl } from './sessions.js';
 
@@ -102,21 +102,22 @@ const KNOWN_FILTER = /^"?git-(lfs|crypt)"? (clean|smudge|filter-process)( -- %f)
 // (git-lfs runs those even through the user's own, global lfs filter).
 const RISKY_KEYS = '^(filter\\..*\\.(clean|smudge|process)|lfs\\.extension\\..*|lfs\\.customtransfer\\..*|lfs\\.standalonetransferagent)$';
 /**
- * Does `git config --null --show-scope --get-regexp RISKY_KEYS` (exit code, output) show a repo's own program?
- * Fails closed: an error (old git without --show-scope, a timeout) or output it can't read counts as yes.
- * Pure; tested. Output entries are "scope\0key\nvalue\0", and values may contain newlines.
+ * Entries of `git config --null --show-scope|--show-origin --get-regexp RISKY_KEYS`: "where\0key\nvalue\0" (values
+ * may contain newlines). True when one names a program from the repo's own config, other than plain git-lfs /
+ * git-crypt filters. `isLocal(where)` says if an entry comes from the repo (true), the user (false) or can't tell
+ * (null). Fails closed: an error (a timeout), output it can't read, or an entry of unknown origin counts as yes.
  */
-export function riskyConfig(code, stdout) {
+function riskyEntries(code, stdout, isLocal) {
   if (code === 1) return false; // no such key anywhere
   if (code !== 0) return true;
   const parts = String(stdout || '').split('\0');
   if (parts[parts.length - 1] === '') parts.pop();
   if (parts.length % 2) return true;
   for (let i = 0; i < parts.length; i += 2) {
-    const scope = parts[i];
+    const local = isLocal(parts[i]);
     const nl = parts[i + 1].indexOf('\n');
-    if (!/^\w+$/.test(scope) || nl === -1) return true;
-    if (scope !== 'local' && scope !== 'worktree') continue; // the user's own (global/system) config
+    if (local == null || nl === -1) return true;
+    if (!local) continue; // the user's own (global/system) config
     const key = parts[i + 1].slice(0, nl);
     const value = parts[i + 1].slice(nl + 1);
     if (key.startsWith('filter.') && KNOWN_FILTER.test(value)) continue; // plain git-lfs / git-crypt, nothing else
@@ -124,14 +125,50 @@ export function riskyConfig(code, stdout) {
   }
   return false;
 }
-async function repoDefinesPrograms(dir) {
+
+/** riskyEntries for `--show-scope` output (git 2.26+): "local" and "worktree" are the repo's own. Pure; tested. */
+export function riskyConfig(code, stdout) {
+  return riskyEntries(code, stdout, (scope) => (/^\w+$/.test(scope) ? scope === 'local' || scope === 'worktree' : null));
+}
+
+/**
+ * riskyEntries for `--show-origin` output (git 2.8+, which has no --show-scope): an entry is the repo's own when its
+ * file lies in the repo (its git dir, common dir or working tree: a repo's config can include files it ships); our
+ * own `-c` options are "command line:". Pure; tested.
+ */
+export function riskyOrigins(code, stdout, dir, roots) {
+  const inRepo = (p) => {
+    const abs = path.resolve(dir, p);
+    const real = realOr(abs);
+    return roots.some((r) => isInside(abs, r) || isInside(real, realOr(r)));
+  };
+  return riskyEntries(code, stdout, (where) => {
+    if (where === 'command line:') return false;
+    if (where.startsWith('file:') && where.length > 5) return inRepo(where.slice(5));
+    return null;
+  });
+}
+
+const unknownOption = (r, opt) => r.code === 129 && String(r.stderr || '').includes(opt);
+/** 'ok' | 'risky' (the repo's own config names a program git status could run) | 'old' (git can't tell us). */
+async function repoPrograms(dir) {
   const r = await G(dir, ['config', '--null', '--show-scope', '--get-regexp', RISKY_KEYS]);
-  return riskyConfig(r.code, r.stdout);
+  if (!unknownOption(r, 'show-scope')) return riskyConfig(r.code, r.stdout) ? 'risky' : 'ok';
+  // git < 2.26: no --show-scope, so tell the repo's files from the user's by where each entry comes from.
+  const [o, rp] = await Promise.all([
+    G(dir, ['config', '--null', '--show-origin', '--get-regexp', RISKY_KEYS]),
+    G(dir, ['rev-parse', '--git-dir', '--git-common-dir', '--show-toplevel']),
+  ]);
+  const roots = rp.code === 0 ? rp.stdout.split('\n').filter(Boolean).map((p) => path.resolve(dir, p)) : [];
+  if (unknownOption(o, 'show-origin') || roots.length < 3) return 'old';
+  return riskyOrigins(o.code, o.stdout, dir, roots) ? 'risky' : 'ok';
 }
 
 /** Status of one checkout (repo or worktree). */
 export async function statusOf(dir) {
-  if (await repoDefinesPrograms(dir)) return { ok: false, error: 'This repo defines its own git filters, so Pilotage does not run git status in it', checkedAt: Date.now() };
+  const programs = await repoPrograms(dir);
+  if (programs === 'risky') return { ok: false, error: 'This repo defines its own git filters, so Pilotage does not run git status in it', checkedAt: Date.now() };
+  if (programs === 'old') return { ok: false, error: 'Your git is too old for a safe status (Pilotage needs git 2.26 or newer)', checkedAt: Date.now() };
   const [st, last, remote, recent] = await Promise.all([
     // Submodules have their own config (and filters): don't recurse into them.
     G(dir, ['status', '--porcelain=v2', '--branch', '--untracked-files=normal', '--ignore-submodules=all']),

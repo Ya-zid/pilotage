@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Install the npm package the way a user would and check that it runs: npm pack (builds the web app), a global
-# install into a temp prefix, a temp HOME (data must land in ~/.pilotage), start, health check, status, stop.
+# Install the npm package the way a user would and check that it runs: npm pack (builds the web app), a leak scan of
+# the packed files, a global install into a temp prefix, a temp HOME (data must land in ~/.pilotage), start, health
+# check, status, stop.
 # On macOS also `pilotage install` / `uninstall` (the LaunchAgent). Used by CI on Linux and macOS.
 #
 #   scripts/smoke-npm.sh          needs `npm ci` and `npm ci --prefix web` first
@@ -23,6 +24,11 @@ for f in bin/pilotage server/index.js web/dist/index.html windows/forwarder.js R
 done
 if grep -E '^(data|tests|scripts|web/src|node_modules)/' "$TMP/files.txt"; then echo "unexpected files in the package"; exit 1; fi
 echo "$(wc -l <"$TMP/files.txt") files, $(du -k "$TMP/$tarball" | cut -f1) KB"
+
+step "leak scan of what npm would publish (web/dist included)"
+mkdir -p "$TMP/unpacked"
+tar -xzf "$TMP/$tarball" -C "$TMP/unpacked"
+bash "$ROOT/scripts/leak-scan.sh" --package "$TMP/unpacked/package"
 
 step "npm install -g (temp prefix)"
 npm install -g --silent --no-audit --no-fund --prefix "$TMP/prefix" "$TMP/$tarball"

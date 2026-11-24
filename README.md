@@ -20,9 +20,10 @@ except the AI calls you allow.
 ## Quick start (5 minutes)
 
 **1. You need** Node.js 22 or later (`node -v`) on macOS, Linux, or Windows 10/11 with WSL2. On Windows, do
-everything below **in your Ubuntu (WSL) terminal**, not in PowerShell. [Claude Code](https://claude.com/claude-code)
-should be installed and logged in for summaries and for starting sessions (browsing works without it). No Node 22?
-`nvm install 22` with [nvm](https://github.com/nvm-sh/nvm).
+everything below **in your Ubuntu (WSL) terminal**, not in PowerShell, cmd or Git Bash (there npm refuses the
+package with `EBADPLATFORM`). [Claude Code](https://claude.com/claude-code) should be installed and logged in for
+summaries and for starting sessions (browsing works without it). No Node 22? `nvm install 22` with
+[nvm](https://github.com/nvm-sh/nvm).
 
 **2. Run it:**
 
@@ -32,7 +33,8 @@ npx pilotage-cli
 
 It starts Pilotage on this computer and opens it in your browser with a one-time sign-in. It also prints that
 sign-in link: if no browser window appears, open the link yourself within 2 minutes (or run `npx pilotage-cli open`
-for a fresh one).
+for a fresh one). On WSL, keep that Ubuntu window open until you do step 4: WSL stops Pilotage soon after its last
+window closes.
 
 **3. Look around.** The first start reads your existing sessions (seconds to a minute), then summarizes the last 30
 days of work in the background, a few sessions at a time, within [AI limits](#ai-cost-and-usage) you control.
@@ -81,6 +83,7 @@ For the **phone**: Settings → Phone & security, then pair with a QR code. Guid
 | **Tasks** | To do · Doing · Done, plus **Suggested**: short to-dos the AI finds in your sessions, marked You or Claude. You keep or dismiss them; nothing lands on your board without you |
 | **Projects** | Every git repo or project folder, grouped by workspace (top-level folder), with an AI summary, workstreams, sessions, worktrees, notes and docs (incl. Claude memory files) |
 | **Ideas** | Your captured ideas, plus **possible projects** the project scout spotted: a tool you built inside another project, or a project you said you'd like to build |
+| **Map** | Everything linked on one map: workspaces, projects, workstreams, topics your sessions share, recent sessions, ideas, open tasks, files several sessions edited and your claude.ai chats. Click anything to see its links and open, resume or start a session from it |
 
 Also: **History** (year heatmap, "what did I do that day / week"), **Portfolio & CV** (AI-written project entries,
 EN/FR), **Spin off** (turn part of a project into a new folder with a `CLAUDE.md` handoff written from your past
@@ -88,11 +91,23 @@ sessions), and starting or resuming sessions from the browser or your phone.
 
 - **Multi-harness.** Claude Code (`~/.claude`, and the Windows-side `~/.claude` on WSL), Codex CLI (`~/.codex`) and
   Gemini CLI (`~/.gemini`). More Claude config folders (a second account) can be added in Settings.
+- **claude.ai chats.** Import claude.ai's data export (claude.ai → Settings → Privacy → Export data, then Settings →
+  Sources in Pilotage, on the PC): your online conversations show on the Map, linked to the projects they mention, in
+  Sessions (assistant "claude.ai") and in search. Read-only: each opens in claude.ai; only a compact, redacted index is
+  kept.
 - **AI summaries with a usage guard.** Work is cut into blocks (a stretch of prompts without a 4-hour gap). Each
   block gets a short summary (Haiku by default), each project a summary and workstreams, each day a plan. Results
   are cached and only redone when their input changes.
 - **Project scout.** Now and then, one call per active project (Sonnet by default) looks for parts of your work that
   deserve their own project. Most runs find nothing, which is the intended outcome.
+- **Map.** A mind map of all your work, built from what Pilotage already knows (no extra AI call): search it, focus
+  on one thing and its neighbours, or open it on one project ("See on the map" in a project's ⋯ menu).
+- **Many sessions at once.** The tab title counts the sessions waiting for you, with an optional desktop
+  notification when one starts waiting (Settings → General). Home warns when two running sessions in the same checkout
+  edit the same files. A long session that was compacted several times offers **Continue fresh**: a new session that
+  starts from a recap (summaries, next step, files, last prompts) instead of a fuzzy context.
+- **From the terminal.** `pilotage standup` (what you did, ready to paste), `pilotage resume <project>`,
+  `pilotage export <session>` (markdown for a handoff or a bug report) and `pilotage usage` (tokens per project and day).
 - **Phone access** over your home Wi-Fi or a VPN (NetBird, Tailscale), paired with a QR code.
 - **Live.** Pages update by themselves (server-sent events); you never press refresh.
 
@@ -106,6 +121,7 @@ sessions), and starting or resuming sessions from the browser or your phone.
 | ![Sessions page](docs/images/sessions.png) | ![A project page with summary, next steps and details](docs/images/project.png) |
 | ![Tasks, Suggested tab](docs/images/tasks-suggested.png) | ![Ideas with possible projects from the scout](docs/images/ideas-possible-projects.png) |
 | ![Home on a phone](docs/images/phone-home.png) | ![Sessions on a phone](docs/images/phone-sessions.png) |
+| ![The Map: projects, workstreams, topics, sessions, tasks and claude.ai chats, linked](docs/images/map.png) | ![The Map on a phone](docs/images/phone-map.png) |
 
 </details>
 
@@ -176,6 +192,16 @@ pilotage phone        # enable phone access (WSL: one Windows admin prompt)
 pilotage pair         # QR code in the terminal to pair a phone
 pilotage projects     # list projects            pilotage live   # what's running
 pilotage new <project> [--bg] [--model sonnet] "first prompt"   # start a session (your agents can use this too)
+pilotage standup      # what you worked on since the previous working day, per project, from the AI summaries,
+                      #   plus open tasks and sessions waiting for you. --yesterday | --today | --week |
+                      #   --since 2026-11-20 [--until 2026-11-21], --project NAME, --md (markdown for Slack / a doc)
+pilotage sessions [project]   # latest sessions: short id, last active, project, needs you / working / open
+pilotage resume <project> [--bg] ["prompt"]   # resume the project's latest session (or give a session id);
+                      #   if it's already running, says where to open it instead (exit status 2)
+pilotage export <session id> [--out handoff.md] [--last 20]   # the conversation as markdown: prompts, final
+                      #   replies, tool-call counts; secrets hidden. For handoffs and bug reports (read it first)
+pilotage usage [--week] [--project NAME]   # tokens per project and per day, and the top sessions (last 30 days by
+                      #   default; --days N, --since 2026-11-01). From your transcripts: no AI call
 pilotage build        # rebuild the web app (a git clone)
 pilotage rotate-key   # replace the desktop key the CLI uses
 pilotage install      # `pilotage` on your PATH + autostart at login
@@ -251,14 +277,20 @@ only be changed from the PC.
 
 Guards, all adjustable in Settings → AI:
 
-- Automatic summaries cover the **last 30 days** of work; older work is summarized only when you press "Summarize
-  now" (`"ai": {"backfillDays": 30}` in `state.json` changes the window).
+- Automatic summaries and project briefs cover the **last 30 days** of work (Settings → AI → "Summarize
+  automatically: the last N days"); older work is summarized only when you press "Summarize now" on its project.
 - Pilotage caps its own calls: **500 per 5 hours and 1,500 per day** (non-Claude providers: 300 a day).
 - Automatic work **pauses above 60% of your 5-hour limit and above 92% of your weekly limit**. Claude Code passes
   those numbers (`rate_limits`) to your statusline command; Pilotage reads them from `~/.claude/rate_limits.json`,
   which a statusline script can save (example below). Without that file only the call caps apply.
 - **Pause** (Settings → AI) stops all automatic work until you resume, across restarts. `PILOTAGE_NO_AI=1` turns AI
   off for that server entirely.
+
+How many tokens your own sessions use is a separate question: `pilotage usage` adds up the usage Claude Code records
+on each reply in your transcripts (input, output, cache writes and cache reads), per project and per day; the session
+and project pages show the totals too. It counts the main conversation of Claude Code sessions (not Codex or Gemini
+sessions, and not subagent runs). After an update from an older version, older sessions are counted in the
+background over the first minutes.
 
 <details>
 <summary>A statusline script that saves the usage numbers</summary>

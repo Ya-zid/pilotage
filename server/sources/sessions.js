@@ -9,8 +9,8 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
-import { CLAUDE_DIR, WIN_CLAUDE_DIR, paths, isInternalPath, HOME } from '../config.js';
-import { readJSONSync, writeJSON, writeJSONSync, clip as rawClip, yieldNow, log, isInside, redact, hash } from '../util.js';
+import { CLAUDE_DIR, WIN_CLAUDE_DIR, WSL_DISTRO, paths, isInternalPath, HOME } from '../config.js';
+import { readJSONSync, writeJSON, writeJSONSync, clip as rawClip, yieldNow, log, isInside, redact, hash, isoDay } from '../util.js';
 import { getStore } from '../store.js';
 import { codexAdapter } from './harness/codex.js';
 import { geminiAdapter } from './harness/gemini.js';
@@ -59,6 +59,8 @@ const TRIVIAL_COMMANDS = new Set(
   ).split(' '),
 );
 const FILE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
+// Older index entries (no `usage` yet) get their token counts in the background, this many transcript bytes per scan.
+const USAGE_BACKFILL_BYTES = 128 * 1024 * 1024;
 
 export const ORIGIN = {
   human: 'h',
@@ -70,8 +72,16 @@ export const ORIGIN = {
   compact: 'x',
 };
 
-/** Convert a Windows path (C:\Users\X\..) to its WSL mount path. */
+/**
+ * Convert a Windows path to its WSL path: C:\Users\X\.. → /mnt/c/Users/X/..; a folder of this distro opened from
+ * Windows (\\wsl.localhost\<distro>\home\.. or \\wsl$\<distro>\..) → /home/... Other paths are returned unchanged.
+ */
 export function winToWsl(p) {
+  const u = /^[\\/]{2}wsl(?:\.localhost|\$)[\\/]([^\\/]+)(?:[\\/](.*))?$/i.exec(p || '');
+  if (u) {
+    if (u[1].toLowerCase() !== WSL_DISTRO.toLowerCase()) return p; // another distro: not this file system
+    return `/${(u[2] || '').replace(/\\/g, '/')}`.replace(/(.)\/+$/, '$1');
+  }
   const m = /^([A-Za-z]):[\\/](.*)$/.exec(p || '');
   if (!m) return p;
   return `/mnt/${m[1].toLowerCase()}/${m[2].replace(/\\/g, '/')}`.replace(/\/+$/, '');
@@ -157,10 +167,41 @@ function newMeta(id, source, file, projectKey) {
     prs: [],
     models: {},
     outTokens: 0,
+    // Tokens from the API usage on assistant lines (main conversation): totals, per local day as [in, out, cw, cr]
+    // (input, output, cache write, cache read), and the last message counted (its lines repeat the usage; see addUsage).
+    // Missing in index entries written by earlier versions: backfillUsage() fills them in.
+    usage: { in: 0, out: 0, cw: 0, cr: 0 },
+    usageDays: {},
+    usageMsg: null,
     firstPrompt: null,
     turnCount: 0,
     archived: false,
+    roots: [], // uuids of the first turn and of compact summaries: where a fork of this session can start (markForks)
   };
+}
+
+/** Human prompts of a session, without those a fork copied from its parent (they count in the parent). */
+export function ownPrompts(meta) {
+  return Math.max(0, (meta?.counts?.h || 0) - (meta?.inherited?.h || 0));
+}
+
+/**
+ * A session's token usage without the lines a fork copied from its parent (their API usage is the parent's, counted
+ * there): {usage, usageDays} like the meta's, or null when its usage isn't recorded.
+ */
+export function ownUsage(meta) {
+  if (!meta?.usage) return null;
+  const inh = meta.inherited?.usage;
+  if (!inh) return { usage: meta.usage, usageDays: meta.usageDays || {} };
+  const usage = {};
+  for (const k of ['in', 'out', 'cw', 'cr']) usage[k] = Math.max(0, (meta.usage[k] || 0) - (inh[k] || 0));
+  const usageDays = {};
+  for (const [day, u] of Object.entries(meta.usageDays || {})) {
+    const minus = meta.inherited.usageDays?.[day] || [0, 0, 0, 0];
+    const own = u.map((v, i) => Math.max(0, v - (minus[i] || 0)));
+    if (own.some(Boolean)) usageDays[day] = own;
+  }
+  return { usage, usageDays };
 }
 
 /** Classify a user-message string. Returns {origin, text} or null to skip. */
@@ -214,6 +255,56 @@ function pruneFiles(meta) {
   meta.files = Object.fromEntries(entries.slice(0, 200));
 }
 
+const tok = (v) => (Number.isFinite(v) && v > 0 ? Math.floor(v) : 0);
+
+/**
+ * Count one assistant line's API usage into meta.usage / usageDays (and outTokens). Claude Code writes one line per
+ * content block (thinking, text, tool call) and repeats the message's usage on each, so lines of the same message id
+ * count once: each field adds only what it grew by since that message's previous line (they can grow while it streams).
+ */
+export function addUsage(m, msg, ts) {
+  const u = msg?.usage;
+  if (!u || typeof u !== 'object') return;
+  const cur = [tok(u.input_tokens), tok(u.output_tokens), tok(u.cache_creation_input_tokens), tok(u.cache_read_input_tokens)];
+  const id = typeof msg.id === 'string' && msg.id ? msg.id : null;
+  const prev = id && m.usageMsg?.id === id ? m.usageMsg.u : [0, 0, 0, 0];
+  const add = cur.map((v, i) => Math.max(0, v - prev[i]));
+  m.usageMsg = id ? { id, u: cur.map((v, i) => Math.max(v, prev[i])) } : null;
+  if (!add.some(Boolean)) return;
+  if (!m.usage) m.usage = { in: 0, out: 0, cw: 0, cr: 0 };
+  if (!m.usageDays) m.usageDays = {};
+  m.usage.in += add[0];
+  m.usage.out += add[1];
+  m.usage.cw += add[2];
+  m.usage.cr += add[3];
+  m.outTokens = (m.outTokens || 0) + add[1];
+  const day = isoDay(ts || m.lastAt || Date.now());
+  const d = (m.usageDays[day] ||= [0, 0, 0, 0]);
+  for (let i = 0; i < 4; i++) d[i] += add[i];
+}
+
+/** Usage only, for backfilling older index entries: assistant lines of the main conversation, nothing else. */
+class UsageParser {
+  constructor(meta) {
+    this.meta = meta;
+  }
+  line(buf) {
+    if (buf.length < 10) return;
+    const head = buf.toString('latin1', 0, Math.min(buf.length, 700));
+    // The same lines TranscriptParser reads usage from (it skips {"type":"…"} lines that aren't titles).
+    if (head.startsWith('{"type":"') || headType(head) !== 'assistant' || head.includes('"isSidechain":true') || !buf.includes('"usage"')) return;
+    const text = parsable(buf);
+    if (text == null) return;
+    let o;
+    try {
+      o = JSON.parse(text);
+    } catch {
+      return;
+    }
+    if (!o.isSidechain) addUsage(this.meta, o.message, tsOf(o));
+  }
+}
+
 /** Parser for one transcript; mutates meta + turns. */
 class TranscriptParser {
   constructor(meta, turns, mapCwd) {
@@ -223,6 +314,21 @@ class TranscriptParser {
   }
   cur() {
     return this.turns[this.turns.length - 1];
+  }
+  /** New turn; its line's uuid is kept so a fork's copies of it can be recognised (markForks). */
+  push(turn, o, origin) {
+    const m = this.meta;
+    if (typeof o.uuid === 'string' && o.uuid.length <= 64) {
+      turn.u = o.uuid;
+      if (!this.turns.length || origin === ORIGIN.compact) {
+        m.roots = (m.roots || []).concat(o.uuid);
+        if (m.roots.length > 50) m.roots.splice(1, 1); // keep the first turn's
+      }
+      // A copied line that still names the session it was written in.
+      if (!this.turns.length && typeof o.sessionId === 'string' && o.sessionId !== m.id) m.forkOf = o.sessionId;
+    }
+    this.turns.push(turn);
+    return turn;
   }
   touch(ts) {
     if (!ts) return;
@@ -313,7 +419,7 @@ class TranscriptParser {
       if (cls.origin === ORIGIN.compact) m.compactions++;
       if ((cls.origin === ORIGIN.human || cls.origin === ORIGIN.sdk) && !m.firstPrompt) m.firstPrompt = clip(cls.text, 600);
       if (cls.origin === ORIGIN.human) m.lastHumanAt = Math.max(m.lastHumanAt, ts);
-      this.turns.push({ t: ts, o: cls.origin, p: cls.text, off, a: '', at: 0, n: 0, e: ts });
+      this.push({ t: ts, o: cls.origin, p: cls.text, off, a: '', at: 0, n: 0, e: ts }, o, cls.origin);
       this.touch(ts);
       return;
     }
@@ -321,17 +427,14 @@ class TranscriptParser {
     // assistant
     const msg = o.message || {};
     if (msg.model && msg.model !== '<synthetic>') m.models[msg.model] = (m.models[msg.model] || 0) + 1;
-    if (msg.usage?.output_tokens) m.outTokens += msg.usage.output_tokens;
+    addUsage(m, msg, ts);
     const blocks = Array.isArray(msg.content) ? msg.content : [];
     for (const b of blocks) {
       if (!b) continue;
       if (b.type === 'text' && b.text && b.text.trim()) {
         m.counts.assistantText++;
         let cur = this.cur();
-        if (!cur) {
-          cur = { t: ts, o: ORIGIN.system, p: '', off, a: '', at: 0, n: 0, e: ts };
-          this.turns.push(cur);
-        }
+        if (!cur) cur = this.push({ t: ts, o: ORIGIN.system, p: '', off, a: '', at: 0, n: 0, e: ts }, o, ORIGIN.system);
         cur.a = clip(b.text.trim(), 1600);
         cur.at = ts;
         addPrLinks(m, b.text);
@@ -352,9 +455,12 @@ class TranscriptParser {
   }
 }
 
-async function parseFile(meta, turns, mapCwd, fromOffset, size) {
-  const fh = await fsp.open(meta.file, 'r');
-  const parser = new TranscriptParser(meta, turns, mapCwd);
+/**
+ * Feed every complete line of `file` from `fromOffset` to `size` to parser.line(buf, offset), in 8 MB chunks; lines over
+ * MAX_LINE are skipped. Returns the offset after the last complete line (the rest is re-read next time).
+ */
+async function readLines(file, parser, fromOffset, size) {
+  const fh = await fsp.open(file, 'r');
   const buf = Buffer.allocUnsafe(CHUNK);
   let pos = fromOffset;
   let carry = null; // partial line
@@ -405,10 +511,21 @@ async function parseFile(meta, turns, mapCwd, fromOffset, size) {
   } finally {
     await fh.close();
   }
+  return lastGood;
+}
+
+async function parseFile(meta, turns, mapCwd, fromOffset, size) {
   // Only advance to the last complete line; the rest is re-read next time.
-  meta.offset = lastGood;
+  meta.offset = await readLines(meta.file, new TranscriptParser(meta, turns, mapCwd), fromOffset, size);
   pruneFiles(meta);
   meta.turnCount = turns.length;
+}
+
+/** Token usage of the part of a transcript already indexed (0 to meta.offset), into a fresh set of usage fields. */
+async function fillUsage(meta, end = meta.offset || 0) {
+  const m = { ...meta, usage: { in: 0, out: 0, cw: 0, cr: 0 }, usageDays: {}, usageMsg: null, outTokens: 0 };
+  await readLines(meta.file, new UsageParser(m), 0, end);
+  return { usage: m.usage, usageDays: m.usageDays, usageMsg: m.usageMsg, outTokens: m.outTokens };
 }
 
 export class SessionIndex extends EventEmitter {
@@ -419,6 +536,7 @@ export class SessionIndex extends EventEmitter {
     this.history = new Map(); // id -> {cwd, prompts:[{t,p}], source}
     this.historyMtime = {};
     this.historyLoaded = new Set();
+    this.historyRead = {}; // src -> {size, offset, head} of the last history read (see readHistoryBytes)
     this.scanning = false;
     this.progress = { total: 0, done: 0, bytes: 0, running: false, firstDone: false };
     const saved = readJSONSync(paths.index, null);
@@ -480,8 +598,12 @@ export class SessionIndex extends EventEmitter {
     return out;
   }
 
-  /** Run every adapter; adapter metas live in this.meta next to Claude ones (harness !== 'claude'). */
-  async scanAdapters() {
+  /**
+   * Run every adapter; adapter metas live in this.meta next to Claude ones (harness !== 'claude'). Ids of sessions
+   * that only grew (same file and folder, no turn lost) also go into `grew`: like Claude appends, their writes wait
+   * for flush() instead of rewriting the turns file and the whole index on every scan.
+   */
+  async scanAdapters(grew = new Set()) {
     const changed = [];
     const enabled = this.sourceSettings().harnesses || {};
     const cwds = () => [...new Set([...this.meta.values()].map((m) => m.cwd).filter(Boolean))];
@@ -504,23 +626,158 @@ export class SessionIndex extends EventEmitter {
         const m = m0.harness === a.id ? m0 : { ...m0, harness: a.id };
         present.add(m.id);
         const t = turnsOf.get(m.id);
+        const prev = known.get(m.id);
+        const grown = !!prev && prev.file === m.file && m.size >= prev.size && prev.cwd === m.cwd && (!t || t.length >= (prev.turnCount || 0));
         if (t) {
           m.turnCount = t.length;
           this.cacheTurns(m.id, t);
-          await writeJSON(this.turnsFile(m.id), t);
+          if (grown) this.pendingTurns.set(m.id, t);
+          else {
+            this.pendingTurns.delete(m.id);
+            await writeJSON(this.turnsFile(m.id), t);
+          }
         }
-        const prev = known.get(m.id);
-        if (!prev || t || prev.size !== m.size || prev.mtimeMs !== m.mtimeMs) changed.push(m.id);
+        if (!prev || t || prev.size !== m.size || prev.mtimeMs !== m.mtimeMs) {
+          changed.push(m.id);
+          if (grown) grew.add(m.id);
+        }
         this.meta.set(m.id, m);
       }
       for (const id of known.keys()) {
         if (present.has(id)) continue;
         this.meta.delete(id);
         this.turnCache.delete(id);
+        this.pendingTurns.delete(id);
         changed.push(id);
       }
     }
     return changed;
+  }
+
+  /** Claude sessions whose token usage isn't counted yet (index entries from before usage was recorded). */
+  usagePending() {
+    let n = 0;
+    for (const m of this.meta.values()) if (m.usage === undefined && (m.harness || 'claude') === 'claude' && m.file) n++;
+    return n;
+  }
+
+  /**
+   * Token usage for older index entries, newest first, at most USAGE_BACKFILL_BYTES of transcript per scan so a big
+   * history doesn't hold up indexing. Reads the part already indexed; turns are left as they are (so AI summaries,
+   * keyed by turn, stay valid). An entry whose file changed in the meantime is left for the next scan.
+   */
+  async backfillUsage() {
+    const changed = [];
+    this.usageFailed ||= new Set(); // unreadable this run: not retried (nor logged) every scan
+    const todo = [...this.meta.values()].filter((m) => m.usage === undefined && (m.harness || 'claude') === 'claude' && m.file && !this.usageFailed.has(m.id)).sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0));
+    let budget = USAGE_BACKFILL_BYTES;
+    for (const m of todo) {
+      if (budget <= 0) break;
+      budget -= m.offset || 0;
+      let u;
+      try {
+        u = await fillUsage(m);
+      } catch (e) {
+        this.usageFailed.add(m.id);
+        if (e?.code !== 'ENOENT') log.warn('usage backfill', m.file, e.message);
+        continue;
+      }
+      const now = this.meta.get(m.id);
+      if (now !== m) continue; // re-indexed meanwhile (it then has its own count)
+      this.meta.set(m.id, { ...m, ...u });
+      changed.push(m.id);
+    }
+    return changed;
+  }
+
+  /**
+   * Forks (claude --resume X --fork-session, Pilotage's Fork) begin with copies of the parent's lines: same uuids, same
+   * timestamps. Counted in both, the parent's prompts showed twice in the timeline, project totals, AI digests and
+   * Pick up. A fork's copied leading turns get meta.inherited = {from, n, h, s, usage, usageDays} (the first n turns;
+   * h/s prompts among them; the tokens of the copied lines), which computeBlocks, activity, ownPrompts() and ownUsage()
+   * leave out. Looks only at sessions sharing a first or compact turn with one that changed; returns the ids whose
+   * marking changed.
+   */
+  async markForks(changed) {
+    if (!changed.length) return [];
+    const byRoot = new Map(); // uuid -> ids of Claude sessions with that first or compact turn
+    for (const m of this.meta.values()) {
+      if ((m.harness || 'claude') !== 'claude') continue;
+      for (const u of m.roots || []) {
+        const ids = byRoot.get(u);
+        if (ids) ids.push(m.id);
+        else byRoot.set(u, [m.id]);
+      }
+    }
+    const gone = new Set(changed.filter((id) => !this.meta.has(id)));
+    const todo = new Set();
+    for (const id of changed) for (const u of this.meta.get(id)?.roots || []) for (const o of byRoot.get(u) || []) todo.add(o);
+    for (const m of this.meta.values()) if (m.inherited && (gone.has(m.inherited.from) || !this.meta.has(m.inherited.from))) todo.add(m.id);
+    const uuidsOf = new Map();
+    const uuids = (id) => {
+      if (!uuidsOf.has(id)) uuidsOf.set(id, this.loadTurns(id).map((t) => t.u));
+      return uuidsOf.get(id);
+    };
+    // First turn of `a` that `b` doesn't have: when a's own work began (-Infinity when it has none).
+    const ownStart = (a, bSet) => {
+      const t = this.loadTurns(a).find((x) => x.u && !bSet.has(x.u));
+      return t ? t.t || 0 : -Infinity;
+    };
+    const out = [];
+    for (const id of todo) {
+      const m = this.meta.get(id);
+      if (!m) continue;
+      const first = m.roots?.[0];
+      let inherited = null;
+      const others = first ? (byRoot.get(first) || []).filter((o) => o !== id) : [];
+      if (others.length) {
+        const mine = uuids(id);
+        let best = null;
+        for (const o of others) {
+          const om = this.meta.get(o);
+          const theirs = uuids(o);
+          const set = new Set(theirs);
+          // Does `o` come first? It says so (a copied line names it), or it had turns before the shared one (a fork
+          // made after a compaction), or its own work began earlier (it stopped, or was forked after a rewind).
+          let before;
+          if (m.forkOf === o) before = true;
+          else if (om.forkOf === id) before = false;
+          else if (theirs.indexOf(first) > 0) before = true;
+          else if (mine.indexOf(om.roots?.[0]) > 0) before = false;
+          else {
+            const a = ownStart(o, new Set(mine));
+            const b = ownStart(id, set);
+            before = a < b || (a === b && o < id);
+          }
+          if (!before) continue;
+          let n = 0;
+          while (n < mine.length && mine[n] && set.has(mine[n])) n++;
+          if (n && (!best || n > best.n)) best = { from: o, n };
+        }
+        if (best) {
+          const turns = this.loadTurns(id).slice(0, best.n);
+          inherited = { ...best, h: turns.filter((t) => t.o === ORIGIN.human).length, s: turns.filter((t) => t.o === ORIGIN.sdk).length };
+        }
+      }
+      const was = m.inherited ? { from: m.inherited.from, n: m.inherited.n, h: m.inherited.h, s: m.inherited.s } : null;
+      if (JSON.stringify(was) === JSON.stringify(inherited)) continue;
+      if (inherited && m.file && m.usage) {
+        // The copied lines' tokens: everything before the fork's first own turn (or all it has indexed so far).
+        const own = this.loadTurns(id)[inherited.n];
+        try {
+          const u = await fillUsage(m, own && own.off >= 0 ? own.off : m.offset || 0);
+          inherited.usage = u.usage;
+          inherited.usageDays = u.usageDays;
+        } catch (e) {
+          log.warn('fork usage', m.file, e.message);
+        }
+      }
+      if (this.meta.get(id) !== m) continue; // re-indexed meanwhile: the next scan looks again
+      if (inherited) m.inherited = inherited;
+      else delete m.inherited;
+      out.push(id);
+    }
+    return out;
   }
 
   /** Claude account of older index entries (session-owner lines sit at the top of the transcript). */
@@ -626,13 +883,17 @@ export class SessionIndex extends EventEmitter {
     };
   }
 
-  /** history.jsonl: every prompt typed, including sessions whose transcripts were cleaned up. */
+  /**
+   * history.jsonl: every prompt typed, including sessions whose transcripts were cleaned up. It grows by one line per
+   * prompt, so after the first read only the appended bytes are read (a full re-read of a big history on every prompt
+   * stalled the server). Returns {changed, touched: ids that got prompts, added: ids new to this.history}.
+   */
   async readHistory() {
     // WSL and Windows sides, once each when one is a link to the other (the same prompts would be merged twice).
     const files = this.allSources()
       .filter((s) => !s.extra)
       .map((s) => ({ src: s.id, file: path.join(s.dir, 'history.jsonl'), map: s.mapCwd }));
-    let changed = false;
+    const out = { changed: false, touched: new Set(), added: new Set() };
     for (const f of files) {
       let st;
       try {
@@ -642,13 +903,20 @@ export class SessionIndex extends EventEmitter {
       }
       const key = `${f.src}:${st.size}:${st.mtimeMs}`;
       if (this.historyMtime[f.src] === key && this.historyLoaded.has(f.src)) continue;
+      let read;
+      try {
+        read = await this.readHistoryBytes(f, this.historyLoaded.has(f.src) ? this.historyRead[f.src] : null);
+      } catch (e) {
+        log.warn('history read failed', f.file, e.message);
+        continue;
+      }
       this.historyLoaded.add(f.src);
       this.historyMtime[f.src] = key;
-      changed = true;
-      // Remove previous entries of that source, then re-read (file is small).
-      for (const [id, h] of this.history) if (h.source === f.src) this.history.delete(id);
-      const text = await fsp.readFile(f.file, 'utf8');
+      out.changed = true;
+      if (!read.append) for (const [id, h] of this.history) if (h.source === f.src) this.history.delete(id); // rewritten
+      this.historyRead[f.src] = read.state;
       let anon = 0;
+      const text = read.buf.toString('utf8');
       for (const line of text.split('\n')) {
         if (!line) continue;
         let o;
@@ -669,13 +937,48 @@ export class SessionIndex extends EventEmitter {
         if (!h) {
           h = { cwd, prompts: [], source: f.src };
           this.history.set(id, h);
+          out.added.add(id);
         }
         h.prompts.push({ t: o.timestamp || 0, p: clip(disp, 1200) });
+        out.touched.add(id);
       }
-      for (const h of this.history.values()) h.prompts.sort((a, b) => a.t - b.t);
+      for (const id of out.touched) {
+        const h = this.history.get(id);
+        if (!h) continue;
+        h.prompts.sort((a, b) => a.t - b.t);
+        h._covered = undefined; // its time span may have changed (historyCovered)
+      }
       if (anon) log.info(`history ${f.src}: ${anon} prompts without session id grouped per day`);
     }
-    return changed;
+    return out;
+  }
+
+  /**
+   * The complete lines of a history file not read yet: from `last.offset` when the file only grew since `last` (same
+   * first bytes, not shorter), else all of it. `state` is what the next call needs.
+   */
+  async readHistoryBytes(f, last) {
+    const fh = await fsp.open(f.file, 'r');
+    try {
+      const { size } = await fh.stat();
+      const headBuf = Buffer.alloc(Math.min(size, 256));
+      await fh.read(headBuf, 0, headBuf.length, 0);
+      const head = headBuf.toString('latin1');
+      const append = !!last && size >= last.size && head.startsWith(last.head);
+      const from = append ? last.offset : 0;
+      const buf = Buffer.alloc(Math.max(0, size - from));
+      let got = 0;
+      while (got < buf.length) {
+        const { bytesRead } = await fh.read(buf, got, buf.length - got, from + got);
+        if (!bytesRead) break;
+        got += bytesRead;
+      }
+      // Up to the last complete line: a line being written is read whole next time.
+      const end = buf.lastIndexOf(10, got - 1) + 1;
+      return { append, buf: buf.subarray(0, end), state: { size: from + got, offset: from + end, head } };
+    } finally {
+      await fh.close();
+    }
   }
 
   /** Every prompt from history (for the timeline). */
@@ -747,7 +1050,7 @@ export class SessionIndex extends EventEmitter {
       const cwdBefore = new Map();
       for (const [id, m] of this.meta) cwdBefore.set(id, m.cwd);
       let onlyAppends = true; // every change is new lines on a session already indexed → writes can wait
-      const histChanged = await this.readHistory();
+      const hist = await this.readHistory();
       const files = await this.listFiles();
       const seen = new Set(files.map((f) => f.id));
       // Transcripts that disappeared (Claude Code cleanup) fall back to history. Not when their folder just couldn't be
@@ -765,7 +1068,8 @@ export class SessionIndex extends EventEmitter {
       }
       const todo = files.filter((f) => {
         const m = this.meta.get(f.id);
-        return !m || m.size !== f.size || m.mtimeMs !== f.mtimeMs;
+        // (Indexed before turns kept their uuids: parsed again once, so forks are recognised.)
+        return !m || m.size !== f.size || m.mtimeMs !== f.mtimeMs || !m.roots;
       });
       todo.sort((a, b) => b.mtimeMs - a.mtimeMs);
       this.progress = { ...this.progress, total: todo.length, done: 0, bytes: 0, running: todo.length > 0 };
@@ -781,19 +1085,26 @@ export class SessionIndex extends EventEmitter {
         this.progress.bytes += f.size;
         if (this.progress.done % 5 === 0) this.emit('progress', this.progress);
       }
-      const other = [...(await this.scanAdapters()), ...(await this.backfillAccounts())];
-      if (other.length) onlyAppends = false;
+      const grew = new Set();
+      const other = [...(await this.scanAdapters(grew)), ...(await this.backfillAccounts()), ...(await this.backfillUsage())];
+      if (other.some((id) => !grew.has(id))) onlyAppends = false;
       changed.push(...other);
+      for (const id of await this.markForks(changed)) if (!changed.includes(id)) changed.push(id);
       this.progress.running = false;
       this.progress.firstDone = true;
-      if (changed.length || histChanged) {
+      // History lines of sessions with a transcript change nothing shown (their prompts come from the transcript);
+      // those of history-only sessions refresh them, and a new one is structural (a session appears).
+      const histOnly = [...hist.touched].filter((id) => !this.meta.has(id) && !changed.includes(id));
+      if (changed.length || hist.changed) {
         if (onlyAppends) this.scheduleFlush();
         else await this.flush();
       }
       this.emit('progress', this.progress);
-      // Structural: sessions appeared, disappeared or changed folder, or history changed (history-only sessions).
-      this.lastScan = { structural: histChanged || changed.some((id) => !cwdBefore.has(id) || !this.meta.has(id) || cwdBefore.get(id) !== this.meta.get(id).cwd) };
-      if (histChanged && !changed.length) changed.push('*history*');
+      // Structural: sessions appeared, disappeared or changed folder (a new history-only session included).
+      this.lastScan = {
+        structural: histOnly.some((id) => hist.added.has(id)) || changed.some((id) => !cwdBefore.has(id) || !this.meta.has(id) || cwdBefore.get(id) !== this.meta.get(id).cwd),
+      };
+      changed.push(...histOnly);
     } finally {
       this.scanning = false;
     }
@@ -805,11 +1116,15 @@ export class SessionIndex extends EventEmitter {
     let meta = this.meta.get(f.id);
     let turns;
     let from = 0;
-    if (meta && meta.file === f.file && meta.offset > 0 && f.size >= meta.size && (this.pendingTurns.has(f.id) || fs.existsSync(this.turnsFile(f.id)))) {
-      // incremental
+    if (meta && meta.roots && meta.file === f.file && meta.offset > 0 && f.size >= meta.size && (this.pendingTurns.has(f.id) || fs.existsSync(this.turnsFile(f.id)))) {
+      // incremental. Deep copies: the parser changes counts, tools and the open turn in place, and a read error halfway
+      // must leave the indexed session as it was (a retry from the same offset would count those lines twice).
       turns = this.loadTurns(f.id).slice();
+      if (turns.length) turns[turns.length - 1] = { ...turns[turns.length - 1] };
       from = meta.offset;
-      meta = { ...meta };
+      meta = structuredClone(meta); // usage fields included
+      // An entry from before usage was counted: count the part already indexed first, then the new lines add to it.
+      if (meta.usage === undefined) Object.assign(meta, await fillUsage(meta));
       if (turns.length !== (meta.turnCount || 0)) {
         // turns file and index disagree (e.g. killed between the two writes): re-parse from scratch, never replay
         meta = newMeta(f.id, f.src.id, f.file, f.projectKey);

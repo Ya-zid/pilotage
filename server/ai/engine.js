@@ -103,7 +103,8 @@ export function computeBlocks(meta, turns) {
   const blocks = [];
   let cur = null;
   let lastE = 0;
-  for (let i = 0; i < turns.length; i++) {
+  // A fork's first turns are copies of its parent's (see markForks in sources/sessions.js): their blocks are the parent's.
+  for (let i = meta.inherited?.n || 0; i < turns.length; i++) {
     const t = turns[i];
     const primary = PRIMARY.has(t.o);
     const gap = t.t && lastE && t.t - lastE > GAP;
@@ -358,7 +359,7 @@ export class AIEngine extends EventEmitter {
 
   /** Blocks of one session (cached on lastAt/turnCount). */
   blocksOf(meta) {
-    const sig = `${meta.lastAt}:${meta.turnCount}:${meta.offset || 0}`;
+    const sig = `${meta.lastAt}:${meta.turnCount}:${meta.offset || 0}:${meta.inherited?.n || 0}`;
     const c = this.blockCache.get(meta.id);
     if (c && c.sig === sig) return c.blocks;
     const turns = this.index.loadTurns(meta.id);
@@ -439,12 +440,17 @@ export class AIEngine extends EventEmitter {
    * subscription on year-old work and keep Home empty until the whole backlog is done. "Summarize now" (manual)
    * covers everything.
    */
+  /** Start of the automatic window (Settings → AI → "Summarize automatically: the last N days", 30 by default). */
+  windowStart(now = Date.now()) {
+    const days = Number(this.settings.backfillDays);
+    return now - (Number.isFinite(days) && days > 0 ? days : 30) * 86400e3;
+  }
+
   pendingBlocks({ manual = false } = {}) {
     const out = [];
     const now = Date.now();
     const sig = this.providerSig();
-    const days = Number(this.settings.backfillDays);
-    const oldest = manual ? 0 : now - (Number.isFinite(days) && days > 0 ? days : 30) * 86400e3;
+    const oldest = manual ? 0 : this.windowStart(now);
     for (const meta of this.index.list()) {
       if (isAutomation(meta)) continue;
       const proj = this.registry.projectOfSession(meta);
@@ -701,8 +707,13 @@ export class AIEngine extends EventEmitter {
     const sig = this.providerSig();
     const pendingByProject = new Map();
     for (const p of pending) pendingByProject.set(p.project.path, (pendingByProject.get(p.project.path) || 0) + 1);
+    const oldest = this.windowStart(now);
     for (const project of this.registry.projects.values()) {
       if (pendingByProject.get(project.path)) continue; // wait for its block digests first
+      // Same window as the blocks: on a first run, projects untouched for a year don't each get a brief ("Summarize
+      // now" on the project still writes one). A new session or commit brings a project back into the window.
+      const lastCommitAt = this.registry.gitOf?.(project.path)?.status?.lastCommitAt || 0;
+      if (Math.max(project.lastAt || 0, lastCommitAt) < oldest) continue;
       const cur = this.state.projects[project.path];
       if (cur && now - (cur.at || 0) < 2 * 3600e3) continue; // at most one brief per project every 2 h
       if (cur && cur.failedAt && now - cur.failedAt < 30 * 60e3) continue;
