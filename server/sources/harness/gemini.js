@@ -13,8 +13,8 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { HOME, WIN_HOME, SCAN_SKIP } from '../../config.js';
-import { yieldNow } from '../../util.js';
+import { HOME, WIN_HOME, SCAN_SKIP, HOME_SKIP } from '../../config.js';
+import { yieldNow, holdsProjects } from '../../util.js';
 import { clip, baseMeta, TurnBuilder, tsOf, cleanCwd, pruneFiles, addPrLinks } from './common.js';
 
 export const GEMINI_DIR = path.join(HOME, '.gemini');
@@ -110,11 +110,12 @@ class HashResolver {
       } catch {
         return;
       }
-      if (ents.length > 400 && depth >= 1) return;
-      for (const e of ents) {
-        if (!e.isDirectory() || e.name.startsWith('.') || SCAN_SKIP.has(e.name)) continue;
+      const subdirs = ents.filter((e) => e.isDirectory() && !e.name.startsWith('.') && !SCAN_SKIP.has(e.name) && !(dir === HOME && HOME_SKIP.has(e.name))).map((e) => e.name);
+      // A huge folder is skipped (generated), unless it holds projects (~/code with 400+ repos): see holdsProjects.
+      if (ents.length > 400 && depth >= 1 && !(await holdsProjects(dir, subdirs, ['.git', 'GEMINI.md', 'CLAUDE.md']))) return;
+      for (const name of subdirs) {
         if (++n % 200 === 0) await yieldNow();
-        await visit(path.join(dir, e.name), depth + 1, max);
+        await visit(path.join(dir, name), depth + 1, max);
       }
     };
     for (const r of roots) if (fs.existsSync(r.dir)) await visit(r.dir, 0, r.depth);

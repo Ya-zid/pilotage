@@ -5,7 +5,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { ChevronRight, MoreHorizontal, Play, Plus, Smartphone, Sparkles, SquareTerminal, SunDim, X } from 'lucide-react';
-import { useBootstrap, useDevices, useNet } from '../../api';
+import { useBootstrap, useDevices, useNetOnce } from '../../api';
 import { pickupHide, planFocus, useWork } from '../../api-extra';
 import { useApp } from '../AppContext';
 import { Button, Callout, Card, EmptyState, Meta, PageHeader, ProjectGlyph, Section, StatusIcon, useToast } from '../ui';
@@ -201,11 +201,22 @@ export function Welcome({ phone }: { phone: boolean }) {
 // ---------------------------------------------------------------- 2. phone setup (PC only, until a phone is paired)
 
 export function PhoneSetup() {
-  const { data: devs } = useDevices();
-  const { data: net } = useNet();
   const [dismissed, setDismissed] = usePref<'0' | '1'>('pilotage.today.phoneSetupDismissed', '0');
-  if (!devs || !net || dismissed === '1') return null;
+  // Asks the server nothing once dismissed (Home stays open on the PC for hours).
+  return dismissed === '1' ? null : <PhoneSetupCallout onDismiss={() => setDismissed('1')} />;
+}
+
+function PhoneSetupCallout({ onDismiss }: { onDismiss: () => void }) {
+  const { data: devs } = useDevices();
+  const { data: net } = useNetOnce();
+  if (!devs || !net) return null;
   if (devs.devices.some((d) => /android|iphone|ipad|mobile/i.test(d.ua))) return null;
+  const how =
+    net.mode === 'off'
+      ? 'Phone access is off on this computer: start Pilotage with PILOTAGE_LAN_BIND (see Settings → Phone & security), then pair with a QR code.'
+      : net.firewallRule || net.mode === 'bind'
+        ? 'Pair it in Settings → Devices and scan the QR code.'
+        : 'Enable phone access in Settings, then pair it with a QR code.';
   return (
     <Callout
       icon={<Smartphone size={18} />}
@@ -215,13 +226,13 @@ export function PhoneSetup() {
           <Link to="/settings" className="btn sm">
             Set up
           </Link>
-          <Button size="sm" variant="ghost" onClick={() => setDismissed('1')}>
+          <Button size="sm" variant="ghost" onClick={onDismiss}>
             Not now
           </Button>
         </div>
       }
     >
-      {net.firewallRule ? 'Pair it in Settings → Devices and scan the QR code.' : 'Enable phone access in Settings, then pair it with a QR code.'} About two minutes.
+      {how} About two minutes.
     </Callout>
   );
 }

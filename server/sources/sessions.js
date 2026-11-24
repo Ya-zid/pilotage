@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
-import { CLAUDE_DIR, WIN_CLAUDE_DIR, paths, INTERNAL_PATHS, HOME } from '../config.js';
+import { CLAUDE_DIR, WIN_CLAUDE_DIR, paths, isInternalPath, HOME } from '../config.js';
 import { readJSONSync, writeJSON, writeJSONSync, clip as rawClip, yieldNow, log, isInside, redact, hash } from '../util.js';
 import { getStore } from '../store.js';
 import { codexAdapter } from './harness/codex.js';
@@ -23,12 +23,28 @@ const clip = (s, n) => rawClip(redact(s), n);
 const CHUNK = 8 * 1024 * 1024;
 const MAX_LINE = 96 * 1024 * 1024;
 const MAX_PARSE = 6 * 1024 * 1024;
-/** Base64 payloads (pasted screenshots) blanked, so a prompt carrying several images still parses under MAX_PARSE. */
-const IMAGE_DATA = /"data":"[A-Za-z0-9+/=]{1024,}"/g;
+/**
+ * The line as text, with base64 payloads (pasted screenshots) of 1 KB or more blanked, so a prompt carrying several
+ * images still parses under MAX_PARSE; null if it is still too big. A plain indexOf scan: a regex over one multi-MB
+ * base64 run overflows V8's stack (RangeError), which used to drop the whole session.
+ */
 function parsable(buf) {
   if (buf.length <= MAX_PARSE) return buf.toString('utf8');
-  const s = buf.toString('utf8').replace(IMAGE_DATA, '"data":""');
-  return s.length <= MAX_PARSE ? s : null;
+  const s = buf.toString('utf8');
+  const KEY = '"data":"';
+  let out = '';
+  let from = 0;
+  for (let i = s.indexOf(KEY); i !== -1; i = s.indexOf(KEY, from)) {
+    const start = i + KEY.length;
+    const end = s.indexOf('"', start);
+    if (end === -1) break;
+    out += s.slice(from, start);
+    // Keep short values (they aren't images); blank long ones.
+    if (end - start < 1024) out += s.slice(start, end);
+    from = end;
+  }
+  out += s.slice(from);
+  return out.length <= MAX_PARSE ? out : null;
 }
 const META_TYPES = new Set(['ai-title', 'custom-title', 'last-prompt', 'summary', 'agent-name', 'pr-link', 'session-owner']);
 // Appends to a running session wait this long before its turns file and the index are rewritten (see flush()).
@@ -93,6 +109,15 @@ export function headType(head) {
 
 function stripReminders(s) {
   return s.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim();
+}
+
+/** A folder's real path (through symlinks), else the path as given (missing, unreadable for a moment). */
+function realOr(p) {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return p;
+  }
 }
 
 function tsOf(o) {
@@ -429,12 +454,28 @@ export class SessionIndex extends EventEmitter {
     }
   }
 
-  /** Claude config dirs to index: WSL, Windows, plus settings.sources.extraClaudeDirs (other accounts). */
+  /**
+   * Claude config dirs to index: WSL, Windows, plus settings.sources.extraClaudeDirs (other accounts). One source per
+   * real folder: a ~/.claude symlinked to the Windows profile's (or an extra dir aliasing another) would list every
+   * transcript twice, and each scan would re-parse it in full under both paths.
+   */
   allSources() {
-    const out = [...this.sources];
+    const out = [];
+    const byReal = new Map(); // real path -> index in out
+    const add = (s) => {
+      const real = realOr(s.dir);
+      if (!byReal.has(real)) {
+        byReal.set(real, out.length);
+        out.push(s);
+      } else if (s.mapCwd === winToWsl) {
+        // Windows' Claude Code writes there too: map its C:\ folders (POSIX paths pass through winToWsl unchanged).
+        const i = byReal.get(real);
+        out[i] = { ...out[i], mapCwd: winToWsl };
+      }
+    };
+    for (const s of this.sources) add(s);
     for (const dir of this.sourceSettings().extraClaudeDirs || []) {
-      if (typeof dir !== 'string' || !path.isAbsolute(dir) || out.some((s) => s.dir === dir)) continue;
-      out.push({ id: `x-${hash(dir, 6)}`, dir, mapCwd: winToWsl, extra: true });
+      if (typeof dir === 'string' && path.isAbsolute(dir)) add({ id: `x-${hash(dir, 6)}`, dir, mapCwd: winToWsl, extra: true });
     }
     return out;
   }
@@ -519,7 +560,7 @@ export class SessionIndex extends EventEmitter {
   }
 
   isInternal(cwd) {
-    return !cwd || INTERNAL_PATHS.some((p) => isInside(cwd, p));
+    return !cwd || isInternalPath(cwd);
   }
 
   /** All sessions (transcripts + history-only), excluding Pilotage's own. */
@@ -587,8 +628,10 @@ export class SessionIndex extends EventEmitter {
 
   /** history.jsonl: every prompt typed, including sessions whose transcripts were cleaned up. */
   async readHistory() {
-    const files = [{ src: 'wsl', file: path.join(CLAUDE_DIR, 'history.jsonl'), map: (p) => p }];
-    if (WIN_CLAUDE_DIR) files.push({ src: 'win', file: path.join(WIN_CLAUDE_DIR, 'history.jsonl'), map: winToWsl });
+    // WSL and Windows sides, once each when one is a link to the other (the same prompts would be merged twice).
+    const files = this.allSources()
+      .filter((s) => !s.extra)
+      .map((s) => ({ src: s.id, file: path.join(s.dir, 'history.jsonl'), map: s.mapCwd }));
     let changed = false;
     for (const f of files) {
       let st;
@@ -646,12 +689,13 @@ export class SessionIndex extends EventEmitter {
   }
 
   /**
-   * Every transcript file, plus `files.unreadable`: folders that exist but couldn't be read this time (an EIO on
-   * /mnt/c right after Windows sleeps, a drive not mounted yet). Their sessions are not missing, only unseen.
+   * Every transcript file, plus `files.unreadable`: folders (or files) that exist but couldn't be read this time (an
+   * EIO on /mnt/c right after Windows sleeps). Their sessions are not missing, only unseen.
    */
   async listFiles() {
     const files = [];
     files.unreadable = new Set();
+    const ids = new Set();
     for (const src of this.allSources()) {
       const projDir = path.join(src.dir, 'projects');
       let dirs = [];
@@ -673,11 +717,20 @@ export class SessionIndex extends EventEmitter {
         }
         for (const e of ents) {
           if (!e.isFile() || !e.name.endsWith('.jsonl')) continue;
+          const id = e.name.slice(0, -6);
+          // The same session in two places (a copied transcript): keep the first, or each scan would flip between
+          // the two files and re-parse both from byte 0.
+          if (ids.has(id)) continue;
           const file = path.join(dp, e.name);
           try {
             const st = await fsp.stat(file);
-            files.push({ id: e.name.slice(0, -6), file, src, projectKey: d.name, size: st.size, mtimeMs: st.mtimeMs });
-          } catch {}
+            files.push({ id, file, src, projectKey: d.name, size: st.size, mtimeMs: st.mtimeMs });
+            ids.add(id);
+          } catch (e2) {
+            if (e2?.code === 'ENOENT') continue;
+            files.unreadable.add(file); // EIO on stat (/mnt/c after sleep): not deleted
+            ids.add(id); // nor replaced by another copy for this one scan
+          }
         }
       }
     }
@@ -884,7 +937,8 @@ export class SessionIndex extends EventEmitter {
           if (nl === -1) break;
           const line = data.subarray(start, nl);
           start = nl + 1;
-          if (line.length > MAX_PARSE && parsable(line) == null) continue; // screenshots alone are fine (blanked)
+          const text = line.length > MAX_PARSE ? parsable(line) : null; // once per oversized line
+          if (line.length > MAX_PARSE && text == null) continue; // screenshots alone are fine (blanked)
           const head = line.toString('latin1', 0, Math.min(700, line.length));
           if (head.includes('"isSidechain":true')) continue;
           const isToolResult = head.includes('"tool_use_id"') || head.includes('"type":"tool_result"');
@@ -909,7 +963,7 @@ export class SessionIndex extends EventEmitter {
           if (ht !== 'user' && ht !== 'assistant') continue;
           let o;
           try {
-            o = JSON.parse(parsable(line) ?? '');
+            o = JSON.parse(text ?? line.toString('utf8'));
           } catch {
             continue;
           }

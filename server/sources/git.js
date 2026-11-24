@@ -3,6 +3,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { run, pLimit, clip } from '../util.js';
+import { IS_WSL } from '../config.js';
+import { winToWsl } from './sessions.js';
 
 const limit = pLimit(4);
 // Repos found on disk are untrusted (an unpacked archive can ship its own .git/config): a repo's own config could make
@@ -18,6 +20,45 @@ export const gitEnvPath = (p = '') => String(p).split(':').filter((d) => d.start
 const GIT_ENV = { ...process.env, PATH: gitEnvPath(process.env.PATH), GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0', GIT_PAGER: 'cat', GIT_EXTERNAL_DIFF: '', GIT_ALLOW_PROTOCOL: '', GIT_NO_LAZY_FETCH: '1' };
 const G = (dir, args, timeout = 10000) => limit(() => run('git', [...SAFE, '-C', dir, ...args], { timeout, env: GIT_ENV }));
 
+// Git for Windows writes `gitdir: C:/Users/alex/repo/.git/worktrees/feat`; on WSL that is /mnt/c/Users/..., which
+// path.resolve would take for a relative path. Plain Linux and macOS have no drive letters: nothing to map.
+const fromWindows = (p) => (IS_WSL ? winToWsl(p) : p);
+
+/** The folder a `.git` file points to (`gitdir: ...`), resolved from the folder holding it; null if none. Throws. */
+function gitdirOf(dotgit) {
+  const m = /gitdir:\s*(.+)/.exec(fs.readFileSync(dotgit, 'utf8'));
+  return m ? path.resolve(path.dirname(dotgit), fromWindows(m[1].trim())) : null;
+}
+
+function realOr(p) {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return p;
+  }
+}
+
+/**
+ * Main folder of a linked worktree whose repo is not <main>/.git, found as git itself tells a linked worktree: by its
+ * `<gitdir>/commondir`. That is the bare-repo layout proj/.bare + proj/main, proj/feat, where `proj/.git` says
+ * `gitdir: ./.bare`. Null when no folder points at the common dir (e.g. --separate-git-dir: git does not record where
+ * the main checkout is either), so the worktree stays a repo of its own, as before.
+ */
+function mainOfCommonDir(gitdir) {
+  let common;
+  try {
+    common = path.resolve(gitdir, fromWindows(fs.readFileSync(path.join(gitdir, 'commondir'), 'utf8').trim()));
+  } catch {
+    return null;
+  }
+  const parent = path.dirname(common);
+  try {
+    const g = gitdirOf(path.join(parent, '.git'));
+    if (g && (g === common || realOr(g) === realOr(common))) return parent;
+  } catch {}
+  return null;
+}
+
 /** If dir is a git worktree, return {mainRoot, gitdir}; if a main repo, {mainRoot: dir}; else null. */
 export function gitKind(dir) {
   const dotgit = path.join(dir, '.git');
@@ -29,12 +70,12 @@ export function gitKind(dir) {
   }
   if (st.isDirectory()) return { kind: 'repo', mainRoot: dir };
   try {
-    const txt = fs.readFileSync(dotgit, 'utf8');
-    const m = /gitdir:\s*(.+)/.exec(txt);
-    if (!m) return null;
-    const gitdir = path.resolve(dir, m[1].trim());
+    const gitdir = gitdirOf(dotgit);
+    if (!gitdir) return null;
     const i = gitdir.indexOf(`${path.sep}.git${path.sep}worktrees${path.sep}`);
     if (i !== -1) return { kind: 'worktree', mainRoot: gitdir.slice(0, i), gitdir };
+    const main = mainOfCommonDir(gitdir);
+    if (main) return { kind: 'worktree', mainRoot: main, gitdir };
     const j = gitdir.indexOf(`${path.sep}.git${path.sep}modules${path.sep}`);
     if (j !== -1) return { kind: 'submodule', mainRoot: dir };
     return { kind: 'repo', mainRoot: dir };

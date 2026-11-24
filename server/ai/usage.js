@@ -60,7 +60,9 @@ export function usageNow() {
   const savedAt = (rl.saved_at || 0) * 1000;
 
   let five = null;
-  if (rl.five_hour && typeof rl.five_hour.used_percentage === 'number' && (rl.five_hour.resets_at || 0) > now) {
+  // A reset time must look like one (within the next 5 h 10 min): a bogus one (milliseconds from a statusline) kept
+  // until "reset" would hold the guard closed for good.
+  if (rl.five_hour && typeof rl.five_hour.used_percentage === 'number' && (rl.five_hour.resets_at || 0) > now && rl.five_hour.resets_at < now + 5 * 3600 + 600) {
     const r = recordReading(s.five, { pct: rl.five_hour.used_percentage, resetsAt: (rl.five_hour.resets_at || 0) * 1000, at: savedAt }, FIVE_KEEP, nowMs);
     if (r) five = { ...r, source: 'claude' };
   } else {

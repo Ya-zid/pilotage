@@ -34,7 +34,7 @@ export function slugify(s) {
     .toLowerCase()
     .replace(/[ßøłđæœþ]/g, (c) => latin[c])
     .normalize('NFC')
-    .replace(/[^\p{L}\p{N}]+/gu, '-')
+    .replace(/[^\p{L}\p{M}\p{N}]+/gu, '-')
     .replace(/^-+|-+$/g, '');
   return [...slug].slice(0, 60).join('').replace(/-+$/, '');
 }

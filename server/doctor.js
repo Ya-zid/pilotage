@@ -78,9 +78,11 @@ export async function runChecks({ onPath = null, autostart = null, fromNpx = fal
   } else {
     ok(`Claude Code ${cv} (${CLAUDE_BIN})`);
   }
-  if (process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN) {
-    if (process.env.PILOTAGE_USE_ANTHROPIC_API_KEY === '1') warn('Summaries are billed to ANTHROPIC_API_KEY (PILOTAGE_USE_ANTHROPIC_API_KEY=1)', 'The usage guard only sees your subscription: keep an eye on the API account.');
-    else ok('ANTHROPIC_API_KEY is set, but summaries use your Claude login (set PILOTAGE_USE_ANTHROPIC_API_KEY=1 to bill the key)');
+  const keyVar = process.env.ANTHROPIC_API_KEY ? 'ANTHROPIC_API_KEY' : process.env.ANTHROPIC_AUTH_TOKEN ? 'ANTHROPIC_AUTH_TOKEN' : null;
+  if (keyVar) {
+    if (process.env.ANTHROPIC_BASE_URL) ok(`Summaries use ANTHROPIC_BASE_URL with ${keyVar} (a gateway setup is kept as is)`);
+    else if (process.env.PILOTAGE_USE_ANTHROPIC_API_KEY === '1') warn(`Summaries are billed to ${keyVar} (PILOTAGE_USE_ANTHROPIC_API_KEY=1)`, 'The usage guard only sees your subscription: keep an eye on the API account.');
+    else ok(`${keyVar} is set, but summaries use your Claude login (set PILOTAGE_USE_ANTHROPIC_API_KEY=1 to bill it)`);
   }
   const n = countTranscripts(CLAUDE_DIR);
   if (n) ok(`${n} Claude Code session file${n === 1 ? '' : 's'} in ${CLAUDE_DIR}`);

@@ -7,6 +7,27 @@ minor versions.
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-11-24
+
+### Fixed
+
+- A screenshot of about 4.5 MB or more in a prompt no longer makes its whole session disappear from the index (0.4.1
+  blanked image data with a regex that overflowed on very long base64; it's a linear scan now).
+- "Summarize now" writes the project summary after the work it just summarized, and a manual job never waits behind
+  a held automatic one. CV entries go through the AI queue (one at a time per project, counted in the limits).
+- AI calls run in a private temporary folder with no CLAUDE.md above it (fewer tokens, no stray instructions).
+- Summaries keep a gateway setup (`ANTHROPIC_BASE_URL` with its token) as it is.
+- Indexing: each real Claude folder is read once (a symlinked `~/.claude` was parsed twice), a transcript whose file
+  can't be read for a moment isn't treated as deleted, sessions of a removed worktree stay in their repo, Git for
+  Windows worktrees are recognised on WSL, worktrees of a bare repo (`proj/.bare`) group under one project, and a
+  folder with 400+ repos (`~/code`) is scanned.
+- macOS: the home scan stays out of `~/Library` and the media folders (no privacy prompts).
+- Suggested tasks no longer merge into a "Home folder" project from every other project.
+- Project folder names keep combining marks (Devanagari, vowelled Arabic, Hebrew, Tamil).
+- Other open devices refresh when coding tools are turned on or off; an open tool-call list on a working session
+  updates; Home no longer polls the network status.
+- The phone forwarder's restart backoff also covers a forwarder that dies right after starting.
+
 ## [0.4.1] - 2026-11-24
 
 Fixes from a second round of independent review of 0.4.0, and two indexing fixes.
@@ -175,7 +196,8 @@ First public release.
 - Security: a 127.0.0.1-only server, paired devices, one-time codes, a CSRF header, a Host allow-list and redaction
   of common secret formats.
 
-[Unreleased]: https://github.com/Ya-zid/pilotage/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/Ya-zid/pilotage/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/Ya-zid/pilotage/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/Ya-zid/pilotage/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Ya-zid/pilotage/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Ya-zid/pilotage/compare/v0.2.0...v0.3.0

@@ -608,16 +608,7 @@ route('POST', '/api/ai/run', async (req, res, { body }) => {
   if (scope === 'project') {
     const p = registry.byId(body.projectId);
     if (!p) return fail(res, 404, 'Project not found');
-    // digest its pending blocks first, then the brief
-    let n = 0;
-    for (const pb of ai.pendingBlocks({ manual: true }).filter((x) => x.project.path === p.path)) {
-      ai.enqueue({ id: `block:${pb.block.key}`, kind: 'block', priority: 50, manual: true, run: () => ai.digestBlock(pb), label: p.name, projectPath: p.path });
-      n++;
-    }
-    const doBrief = () => ai.briefProject({ project: p });
-    if (n === 0) ai.enqueue({ id: `brief:${p.path}`, kind: 'brief', priority: 49, manual: true, run: doBrief, label: p.name, projectPath: p.path });
-    else ai.enqueue({ id: `brief-after:${p.path}`, kind: 'brief', priority: 1, manual: true, run: doBrief, label: p.name, projectPath: p.path });
-    return json(res, { ok: true, queued: n + 1 });
+    return json(res, { ok: true, queued: ai.summarizeProject(p) });
   }
   if (scope === 'daily') {
     ai.enqueue({ id: `daily-manual:${Date.now()}`, kind: 'daily', priority: 60, manual: true, run: () => ai.runDaily(views.overview(projectsList())), label: 'Daily brief' });
@@ -634,7 +625,7 @@ route('POST', '/api/ai/cv', async (req, res, { body }) => {
   const p = registry.byId(body.projectId);
   if (!p) return fail(res, 404, 'Project not found');
   try {
-    const r = await ai.runCV(p, body.lang === 'fr' ? 'fr' : 'en');
+    const r = await ai.writeCV(p, body.lang === 'fr' ? 'fr' : 'en');
     broadcast('ai-data');
     json(res, r);
   } catch (e) {

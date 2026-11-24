@@ -1,8 +1,7 @@
 // Headless `claude -p` calls with structured output. No tools, no MCP, no user hooks,
 // no session persistence: a pure text-in / JSON-out call on the user's subscription.
-import fs from 'node:fs';
 import path from 'node:path';
-import { CLAUDE_CMD, paths } from '../config.js';
+import { CLAUDE_CMD, aiWorkDir } from '../config.js';
 import { runWithInput, clip, log } from '../util.js';
 
 const BASE_ARGS = [
@@ -26,7 +25,9 @@ export function claudeEnv(parent) {
   // Node last on PATH, for claude's own children (wrapper shims call `node` from PATH; the autostart has no nvm).
   const nodeDir = path.dirname(process.execPath);
   if (!String(env.PATH || '').split(':').includes(nodeDir)) env.PATH = env.PATH ? `${env.PATH}:${nodeDir}` : nodeDir;
-  const keepKey = parent.PILOTAGE_USE_ANTHROPIC_API_KEY === '1';
+  // A gateway or Anthropic-compatible endpoint (ANTHROPIC_BASE_URL) goes with its own token: keep both, or the calls
+  // would reach that URL without its credentials (or with the subscription's token).
+  const keepKey = parent.PILOTAGE_USE_ANTHROPIC_API_KEY === '1' || !!parent.ANTHROPIC_BASE_URL;
   for (const k of Object.keys(env)) if (k.startsWith('PILOTAGE_')) delete env[k];
   if (!keepKey) {
     delete env.ANTHROPIC_API_KEY;
@@ -45,10 +46,11 @@ export async function callClaude({ instruction, input, schema, model = 'haiku', 
   args.push('--', instruction);
   const env = claudeEnv(process.env);
   if (configDir) env.CLAUDE_CONFIG_DIR = configDir;
-  // A missing working folder makes the spawn fail with ENOENT, which reads as "Claude is not installed".
-  fs.mkdirSync(paths.aiSandbox, { recursive: true });
+  // A private temp folder with no CLAUDE.md above it (config.aiWorkDir), made again if it went missing: a missing
+  // working folder makes the spawn fail with ENOENT, which reads as "Claude is not installed".
+  const cwd = aiWorkDir();
   const t0 = Date.now();
-  const r = await runWithInput(CLAUDE_CMD[0], [...CLAUDE_CMD.slice(1), ...args], input, { cwd: paths.aiSandbox, env, timeout });
+  const r = await runWithInput(CLAUDE_CMD[0], [...CLAUDE_CMD.slice(1), ...args], input, { cwd, env, timeout });
   const ms = Date.now() - t0;
   let j = null;
   try {

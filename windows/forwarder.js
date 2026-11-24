@@ -137,7 +137,7 @@ server.on('error', (e) => {
   }
   lastError = String(e.message || e);
   log(`server error: ${lastError}`);
-  heartbeat();
+  heartbeat(true); // exiting: never shown as running
   setTimeout(() => process.exit(1), 500);
 });
 

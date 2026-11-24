@@ -59,3 +59,23 @@ test('Home: a brand-new user with no sessions gets one welcome with New session 
   assert.match(welcome, /onClick=\{\(\) => openNewSession\(\{\}\)\}[^>]*>\s*New session\s*<\/Button>/, 'its button opens the New session dialog');
   assert.match(welcome, /<Link to="\/guide"/, 'it points to the Guide');
 });
+
+test('live updates: coding-tool changes and growing turns reach every open device', () => {
+  const api = src('api.ts');
+  const map = /const KIND_TO_KEYS: Record<string, string\[\]> = \{([\s\S]*?)\n\};/.exec(api)[1];
+  const keys = (kind) => (new RegExp(`\\b${kind}: \\[([^\\]]*)\\]`).exec(map)?.[1] || '').split(',').map((s) => s.trim().replace(/'/g, ''));
+  assert.ok(keys('settings').includes('harnesses'), 'settings → harnesses (New session agent list, Sessions filter)');
+  assert.ok(keys('sessions').includes('turn'), 'sessions → turn (an open tool-call list on a live turn)');
+  const prov = fs.readFileSync(path.join(ROOT, 'server', 'routes', 'providers.js'), 'utf8');
+  const patch = prov.slice(prov.indexOf("route('PATCH', '/api/harnesses'"), prov.indexOf("route('PATCH', '/api/harnesses'") + 2500);
+  assert.match(patch, /broadcast\('settings'\)/, 'PATCH /api/harnesses tells open devices');
+});
+
+test('Home does not poll the network status (each /api/net runs Windows tools on WSL), and its advice fits the platform', () => {
+  const home = src('components/today/HomeSections.tsx');
+  const setup = /export function PhoneSetup\(\)[\s\S]*?\n\}\n/.exec(home)[0];
+  assert.doesNotMatch(setup, /useNet|useDevices/, 'nothing is fetched once the callout is dismissed');
+  assert.match(home, /useNetOnce\(\)/);
+  assert.doesNotMatch(/export const useNetOnce = [^\n]*/.exec(src('api.ts'))[0], /refetchInterval/);
+  assert.match(home, /net\.mode === 'off'/, 'Linux/macOS without PILOTAGE_LAN_BIND get the right advice');
+});

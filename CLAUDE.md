@@ -20,7 +20,7 @@ SECURITY.md for the security model, CONTRIBUTING.md for the rules).
 - Every /api route needs a paired device (cookie) or the CLI desktop key header; mutating routes need `X-Pilotage: 1` + JSON.
   Keep the Host allow-list (DNS-rebinding guard) and the 127.0.0.1 bind.
 - Launch inputs: cwd must be a known project/worktree; names go through sanitizeName; prompts are passed via a file + `--`.
-- AI work goes through ai/engine.js queue + guard (usage thresholds). `claude -p` runs with no tools/MCP/persistence in data/ai-sandbox.
+- AI work goes through ai/engine.js queue + guard (usage thresholds). `claude -p` runs with no tools/MCP/persistence in a private temp folder (`config.aiWorkDir()`, no CLAUDE.md above it).
 - The user's name in prompts and UI comes from settings.profile.name (server/profile.js); never hardcode a name or a gender.
 - Windows-only paths (Windows Terminal, explorer.exe, the forwarder, firewall) are gated on config.IS_WSL; plain Linux/macOS must keep working.
 

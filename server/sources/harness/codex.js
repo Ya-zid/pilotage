@@ -16,8 +16,8 @@
 // Turn offsets are real byte offsets of the user_message line, so turn detail reads the file slice.
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { HOME, INTERNAL_PATHS } from '../../config.js';
-import { yieldNow, isInside } from '../../util.js';
+import { HOME, isInternalPath } from '../../config.js';
+import { yieldNow } from '../../util.js';
 import { clip, baseMeta, TurnBuilder, eachLine, tsOf, cleanCwd, pruneFiles, addPrLinks } from './common.js';
 
 export const CODEX_DIR = process.env.CODEX_HOME || path.join(HOME, '.codex');
@@ -316,9 +316,9 @@ export const codexAdapter = {
       }
       const sig = `${f.size}:${f.mtimeMs}`;
       if (this.empty.get(f.file) === sig || this.empty.get(f.file) === 'internal') continue;
-      // Pilotage's own `codex exec` AI calls (cwd = data/ai-sandbox) are not sessions.
+      // Pilotage's own `codex exec` AI calls (cwd = config.aiWorkDir(), data/ai-sandbox before) are not sessions.
       const cwd = await headCwd(f.file);
-      if (cwd && INTERNAL_PATHS.some((p) => isInside(cleanCwd(cwd), p))) {
+      if (cwd && isInternalPath(cleanCwd(cwd))) {
         this.empty.set(f.file, 'internal');
         continue;
       }
