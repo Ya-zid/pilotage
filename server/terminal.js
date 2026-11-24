@@ -7,7 +7,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { IS_WSL, HOME } from './config.js';
+import { IS_WSL, HOME, WT_EXE } from './config.js';
 
 /** Run `bash -l SCRIPT` in a new window: the argument style of each emulator. Order = preference. */
 const RUN_LOGIN = (s) => ['-e', 'bash', '-l', s];
@@ -57,10 +57,11 @@ function labelOf(bin) {
  * The terminal to open sessions in, or null when there is none (tested with explicit inputs).
  * Returns {kind: 'wt'|'open'|'exec', label, cmd?, args?(script), ext}.
  */
-export function detectTerminal({ platform = process.platform, env = process.env, wsl = IS_WSL } = {}) {
+export function detectTerminal({ platform = process.platform, env = process.env, wsl = IS_WSL, wtExe = WT_EXE } = {}) {
   const want = String(env.PILOTAGE_TERMINAL || '').trim();
   if (want.toLowerCase() === 'none') return null;
-  if (wsl) return { kind: 'wt', label: 'Windows Terminal', ext: '.sh' };
+  // Windows 10 doesn't ship Windows Terminal: without it, Claude sessions start in the background (launch.js).
+  if (wsl) return wtExe && fs.existsSync(wtExe) ? { kind: 'wt', label: 'Windows Terminal', ext: '.sh' } : null;
   if (platform === 'darwin') {
     const app = want || 'Terminal';
     return { kind: 'open', label: app, cmd: 'open', args: (s) => ['-a', app, s], ext: '.command' };

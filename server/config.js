@@ -53,7 +53,52 @@ export const LAN_INTERNAL_PORT = Number(process.env.PILOTAGE_LAN_INTERNAL_PORT |
 export const BIND = '127.0.0.1';
 
 export const CLAUDE_DIR = path.join(HOME, '.claude');
-export const CLAUDE_BIN = fs.existsSync(path.join(HOME, '.local/bin/claude')) ? path.join(HOME, '.local/bin/claude') : 'claude';
+/**
+ * The `claude` binary as an absolute path when found, else the bare name (pure; tested). Pilotage often runs from the
+ * login item or the Windows Startup entry, whose PATH has no nvm, and launch tabs are fresh login shells: a bare
+ * `claude` is then "command not found" for Claude Code installed with npm under nvm. Order: the native installer, the
+ * folder of the node running Pilotage (bin/pilotage picks the newest nvm node), PATH (never Windows' /mnt/...), the
+ * old ~/.claude/local install, the newest nvm node, then system folders (an old `sudo npm i -g` copy comes last).
+ */
+export function resolveClaudeBin({ home = HOME, envPath = process.env.PATH || '', execDir = path.dirname(process.execPath), systemDirs = ['/usr/local/bin', '/usr/bin', '/opt/homebrew/bin'] } = {}) {
+  const isExe = (p) => {
+    try {
+      fs.accessSync(p, fs.constants.X_OK);
+      return fs.statSync(p).isFile();
+    } catch {
+      return false;
+    }
+  };
+  let nvm = [];
+  try {
+    const root = path.join(home, '.nvm/versions/node');
+    nvm = fs.readdirSync(root).sort((a, b) => b.localeCompare(a, undefined, { numeric: true })).map((v) => path.join(root, v, 'bin'));
+  } catch {}
+  const onPath = envPath.split(':').filter((d) => d && !d.startsWith('/mnt/'));
+  const dirs = [path.join(home, '.local/bin'), execDir, ...onPath, path.join(home, '.claude/local'), ...nvm, ...systemDirs];
+  for (const d of dirs) if (isExe(path.join(d, 'claude'))) return path.join(d, 'claude');
+  return 'claude';
+}
+export const CLAUDE_BIN = resolveClaudeBin();
+/** Is this claude a JavaScript file (`#!/usr/bin/env node`, an npm install) rather than the native binary? (tested) */
+export function isNodeScript(bin) {
+  if (!path.isAbsolute(bin)) return false;
+  try {
+    const fd = fs.openSync(fs.realpathSync(bin), 'r');
+    const head = Buffer.alloc(128);
+    const n = fs.readSync(fd, head, 0, 128, 0);
+    fs.closeSync(fd);
+    const first = head.subarray(0, n).toString('utf8').split('\n')[0];
+    return first.startsWith('#!') && /\bnode\b/.test(first);
+  } catch {
+    return false;
+  }
+}
+/**
+ * The command that runs claude: [bin] for the native binary; [this node, the script] for an npm install, so it never
+ * depends on which node comes first on PATH (an old distro node 12 would crash it) or on node being on PATH at all.
+ */
+export const CLAUDE_CMD = isNodeScript(CLAUDE_BIN) ? [process.execPath, CLAUDE_BIN] : [CLAUDE_BIN];
 export const WSL_DISTRO = process.env.WSL_DISTRO_NAME || 'Ubuntu';
 
 /** Find the Windows user profile as seen from WSL (e.g. /mnt/c/Users/<you>). Null outside WSL. */

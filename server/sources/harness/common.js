@@ -7,6 +7,7 @@ import { HOME } from '../../config.js';
 import { clip as rawClip, redact, run } from '../../util.js';
 
 // Everything stored or shown from transcripts goes through redact().
+// Redact the whole text, then clip (see sessions.js).
 export const clip = (s, n) => rawClip(redact(typeof s === 'string' ? s : s == null ? '' : String(s)), n);
 
 const PR_RX = /https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+/g;

@@ -79,8 +79,9 @@ function useNetActions() {
     enable: () =>
       run('enable', async () => {
         toast('Click “Yes” on the Windows admin prompt on your PC…');
-        const r = await api<{ ok: boolean; error?: string }>('/api/net/enable', { method: 'POST' });
-        if (r.ok) toast('Phone access is on. Now pair your phone.');
+        const r = await api<{ ok: boolean; error?: string; wifi?: string | null; trustedSsid?: string | null }>('/api/net/enable', { method: 'POST', body: {} });
+        if (r.ok && r.wifi && !r.trustedSsid) toast(`Phone access is on. Wi-Fi phones are refused until you trust “${r.wifi}” below (only if it is your home network). Then pair your phone.`);
+        else if (r.ok) toast('Phone access is on. Now pair your phone.');
         else toast(r.error || 'Could not enable phone access', true);
       }),
     start: () =>
@@ -277,7 +278,7 @@ function PhoneAccessCard() {
                   <b className="medium">Home Wi-Fi</b> is only allowed while the PC is on a trusted network. Use the https address (see “Install Pilotage as an app”) to encrypt it; plain http relies on your Wi-Fi's WPA2 encryption.
                 </li>
                 <li>Every page and request needs a paired-device sign-in. Pairing codes work once and expire after 10 minutes.</li>
-                <li>Pairing, devices, the firewall and keys can only be changed from the PC itself, never from a phone.</li>
+                <li>Pairing, devices, the firewall, keys and AI providers can only be changed from the PC itself, never from a phone.</li>
                 <li>The server itself only listens on this PC (127.0.0.1). The forwarder is the only way in, on TCP {lanPort}.</li>
                 <li>If NetBird can't connect, check that your NetBird access policy lets the phone reach this PC on TCP {lanPort}.</li>
               </ul>

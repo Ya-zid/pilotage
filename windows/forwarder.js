@@ -60,15 +60,14 @@ function pollSsid() {
       currentSsid = null;
       return;
     }
+    // Same rule as parseWlanSsid() in server/net.js: "SSID" is not translated and only shows while connected,
+    // unlike "State" ("État", "Status"…), so this works on Windows in any language.
     let ssid = null;
-    let connected = false;
     for (const raw of String(stdout).split(/\r?\n/)) {
-      const line = raw.trim();
-      if (/^State\s*:/i.test(line)) connected = /:\s*connected/i.test(line);
-      const m = /^SSID\s*:\s*(.+)$/i.exec(line);
-      if (m) ssid = m[1].trim();
+      const m = /^SSID\s*:\s*(.+)$/i.exec(raw.trim());
+      if (m && m[1].trim() && !ssid) ssid = m[1].trim();
     }
-    currentSsid = connected ? ssid : null;
+    currentSsid = ssid;
   });
 }
 
@@ -79,15 +78,23 @@ function allowed(remote) {
   return !!currentSsid && (cfg.trustedSsids || []).includes(currentSsid);
 }
 
-function heartbeat() {
+/** exiting: the last heartbeat before process.exit, marked so Pilotage never takes it for a running forwarder. */
+function heartbeat(exiting = false) {
   try {
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(
-      hbFile,
-      JSON.stringify({ pid: process.pid, listenPort: cfg.listenPort, targetPort: cfg.targetPort, at: Date.now(), connections, refused, error: lastError, ssidTrusted: !!currentSsid && (cfg.trustedSsids || []).includes(currentSsid), onWifi: !!currentSsid }),
-    );
+    const hb = { pid: process.pid, listenPort: cfg.listenPort, targetPort: cfg.targetPort, at: Date.now(), connections, refused, error: lastError, ssidTrusted: !!currentSsid && (cfg.trustedSsids || []).includes(currentSsid), onWifi: !!currentSsid };
+    if (exiting) hb.exitedAt = Date.now();
+    fs.writeFileSync(hbFile, JSON.stringify(hb));
   } catch (_) {}
 }
+
+// Leave a trace when it stops on an error (it runs hidden: nobody sees its console).
+process.on('uncaughtException', (e) => {
+  lastError = String((e && e.stack) || e).slice(0, 500);
+  log(`stopped on an error: ${lastError}`);
+  heartbeat(true);
+  process.exit(1);
+});
 
 loadConfig();
 pollSsid();
@@ -118,6 +125,14 @@ const server = net.createServer((client) => {
 server.on('error', (e) => {
   if (e.code === 'EADDRINUSE') {
     log(`port ${cfg.listenPort} already in use; another forwarder is probably running. Exiting.`);
+    // Only when no other forwarder keeps the heartbeat fresh: otherwise this would mark a running one as gone.
+    try {
+      const prev = JSON.parse(fs.readFileSync(hbFile, 'utf8'));
+      if (Date.now() - (prev.at || 0) > 90000) {
+        lastError = `port ${cfg.listenPort} in use by another program`;
+        heartbeat(true);
+      }
+    } catch (_) {}
     process.exit(0);
   }
   lastError = String(e.message || e);

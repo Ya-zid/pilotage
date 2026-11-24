@@ -13,8 +13,10 @@ Protected against:
 - **Websites you visit** (CSRF, DNS rebinding): mutating requests need a custom header and a JSON body, which a
   cross-site page cannot send because CORS is never granted; no GET request changes anything; cookies are
   `HttpOnly` and `SameSite`; and every listener checks the `Host` header against a strict allow-list.
-- **A stolen or lost phone**: devices are listed in Settings → Devices and can be revoked one by one from the PC.
-  Pairing, device management, firewall changes and key rotation are refused when the request comes from a phone.
+- **A stolen or lost phone**, as far as Pilotage's own settings go: devices are listed in Settings → Devices and
+  can be revoked one by one from the PC. Pairing, device management, firewall changes, key rotation and AI provider
+  settings are refused when the request comes from a phone. But see the next section: a paired phone can start
+  coding sessions, so treat it like your PC's keyboard.
 - **Leaking secrets into summaries**: tokens, passwords and keys that appear in prompts are redacted before
   anything is stored, shown or sent to an AI provider.
 - **The AI doing things**: AI jobs only produce text. `claude -p` runs with no tools, no MCP servers, no slash
@@ -22,6 +24,12 @@ Protected against:
 
 Not protected against (out of scope):
 
+- **Someone holding an unlocked paired device.** Starting sessions from the phone is the point of Pilotage, and a
+  session can run commands on the PC (it asks first by default; with "Skip all prompts" in Settings → New sessions
+  → Permissions, it doesn't). So a paired device can do anything you can do in a terminal, including reading
+  Pilotage's own keys. Keep paired devices locked. If one is lost: revoke it in Settings → Devices, run
+  `pilotage rotate-key`, replace any API keys saved in Settings → AI, and check Devices for anything you don't
+  recognise.
 - Malware or another user account on the same computer that can read your files. `data/secrets.json` (mode 600)
   holds the device tokens' hashes, the desktop key and any API keys.
 - Anyone who can use your unlocked PC: the browser on the PC is a paired device.
@@ -38,7 +46,8 @@ Not protected against (out of scope):
 - **The CLI key.** `bin/pilotage` talks to the server with a desktop key read from `data/secrets.json`; it is accepted
   on the local listener only and never appears in a URL. `pilotage rotate-key` replaces it.
 - **Two listeners.** The PC browser and the CLI use one loopback port; phones arrive on another. Requests on the
-  phone listener cannot pair devices, manage devices, change the firewall or rotate keys.
+  phone listener cannot pair devices, manage devices, change the firewall, rotate keys or change AI providers (a
+  stored API key follows its provider, so changing the address would send the key elsewhere).
 - **CSRF.** Mutating requests need `X-Pilotage: 1` and `Content-Type: application/json`.
 - **Host allow-list.** `localhost`, `127.0.0.1` and `*.localhost` on the PC listener; IP addresses and VPN host names
   (NetBird, Tailscale) on the phone listener. Anything else gets `421`.
@@ -55,7 +64,9 @@ for the setup and for how the traffic is protected on Wi-Fi and over a VPN.
 ## What Pilotage reads and writes
 
 - **Reads**, never writes: `~/.claude`, `~/.codex`, `~/.gemini`, your git repositories (git runs with
-  `--no-optional-locks`, hooks and fsmonitor disabled) and project folders. It does not follow symlinks out of a
+  `--no-optional-locks`, with hooks, fsmonitor and signature checks disabled, no network or transport helpers at all,
+  and no `git status` in a repo whose own config names a program git would run: filters, git-lfs extensions or
+  transfer agents) and project folders. It does not follow symlinks out of a
   project when showing documents, and never reads files that look like secrets (`.env`, keys, credentials) for the
   project scout or spin-off handoffs.
 - **Writes**: its own data folder (`~/.pilotage` for an npm install, `data/` in a git clone; `data/` below means
@@ -68,7 +79,7 @@ for the setup and for how the traffic is protected on Wi-Fi and over a VPN.
   takes the lock Claude Code uses for that file, replaces it in one step, and keeps the previous version in
   `data/backups/claude-config/`. Never for the home folder. See `server/claude-trust.js`.
 - **Starts** coding-agent sessions only when you ask (a button or `pilotage new`), with the prompt passed through a
-  file, never through a shell command line.
+  file for terminal launches (background launches pass it as one quoted argument to `claude`).
 
 ## Reporting a vulnerability
 

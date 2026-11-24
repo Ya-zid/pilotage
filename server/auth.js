@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import { paths } from './config.js';
 import { readJSONSync, writeJSONSync, randomToken, hash, safeEqual, clip } from './util.js';
+import { parseIp } from './ip.js';
 
 const COOKIE = 'pl_dev';
 const PAIR_TTL_MS = 10 * 60 * 1000;
@@ -160,26 +161,31 @@ export function authenticate(req) {
 
 /**
  * DNS-rebinding guard. Local listener (PC browser + CLI): loopback names only (incl. *.localhost,
- * which browsers always resolve to loopback). LAN listener (phones via the Windows forwarder):
- * IP literals and NetBird/Tailscale names only. Never arbitrary DNS names.
+ * which browsers always resolve to loopback). LAN listener (phones via the Windows forwarder or a direct bind):
+ * IP literals (IPv6 ones in brackets, without zone id) and NetBird/Tailscale names only. Never arbitrary DNS names.
  */
 export function hostAllowed(hostHeader, viaLan = false, extra = []) {
   if (!hostHeader || typeof hostHeader !== 'string') return false;
   let host = hostHeader.toLowerCase().trim();
+  let ip6 = false;
   if (host.startsWith('[')) {
+    // [IPv6]:port. Brackets hold an IPv6 literal and nothing else (no name, no zone id).
     const end = host.indexOf(']');
-    if (end === -1) return false;
+    if (end === -1 || !/^(:\d{1,5})?$/.test(host.slice(end + 1))) return false;
     host = host.slice(1, end);
+    if (!host.includes(':') || parseIp(host)?.zone !== '') return false;
+    ip6 = true;
   } else host = host.replace(/:\d+$/, '');
   if (!host) return false;
   const loopback = host === 'localhost' || host.endsWith('.localhost') || host === '127.0.0.1' || host === '::1';
   if (!viaLan) return loopback;
-  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return true;
+  if (ip6 || /^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return true;
   if (host.endsWith('.netbird.selfhosted') || host.endsWith('.netbird.cloud') || host.endsWith('.ts.net')) return true;
   return extra.map((h) => String(h).toLowerCase()).includes(host);
 }
 
-/** Failure-only rate limiting per bucket, so a LAN stranger can't lock out real logins with junk requests. */
+/** Failure counting per bucket. Callers check it only after a code failed: past 20 failures in 10 minutes junk gets
+ * 429 instead of 403, and a valid code is never blocked (codes are 144-bit random, so this guards nothing else). */
 const failures = new Map(); // bucket -> timestamps
 export function authBlocked(bucket) {
   const now = Date.now();

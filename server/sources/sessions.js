@@ -16,6 +16,8 @@ import { codexAdapter } from './harness/codex.js';
 import { geminiAdapter } from './harness/gemini.js';
 
 // Everything stored or shown from transcripts goes through redact().
+// Redact the whole text, then clip: clipping first could cut a secret in two and show its first part. Every redaction
+// pattern is bounded, so this stays linear (a 1 MB blob takes milliseconds).
 const clip = (s, n) => rawClip(redact(s), n);
 
 const CHUNK = 8 * 1024 * 1024;
@@ -378,7 +380,7 @@ export class SessionIndex extends EventEmitter {
   constructor() {
     super();
     this.meta = new Map(); // id -> meta
-    this.turnCache = new Map(); // id -> turns (LRU-ish)
+    this.turnCache = new Map(); // id -> turns, the 40 most recently used (cacheTurns)
     this.history = new Map(); // id -> {cwd, prompts:[{t,p}], source}
     this.historyMtime = {};
     this.historyLoaded = new Set();
@@ -453,7 +455,7 @@ export class SessionIndex extends EventEmitter {
         const t = turnsOf.get(m.id);
         if (t) {
           m.turnCount = t.length;
-          this.turnCache.set(m.id, t);
+          this.cacheTurns(m.id, t);
           await writeJSON(this.turnsFile(m.id), t);
         }
         const prev = known.get(m.id);
@@ -485,6 +487,14 @@ export class SessionIndex extends EventEmitter {
     return path.join(paths.turnsDir, `${id}.json`);
   }
 
+  /** Keep only the 40 most recently used sessions' turns in memory (indexing used to keep every session's). Deferred
+   * writes hold their own reference (pendingTurns), so evicting never loses data. */
+  cacheTurns(id, turns) {
+    this.turnCache.delete(id);
+    this.turnCache.set(id, turns);
+    while (this.turnCache.size > 40) this.turnCache.delete(this.turnCache.keys().next().value);
+  }
+
   loadTurns(id) {
     if (this.pendingTurns.has(id)) return this.pendingTurns.get(id);
     if (this.turnCache.has(id)) return this.turnCache.get(id);
@@ -494,8 +504,7 @@ export class SessionIndex extends EventEmitter {
       const h = this.history.get(id);
       if (h) turns = h.prompts.map((x) => ({ t: x.t, o: 'h', p: x.p, off: -1, a: '', at: 0, n: 0, e: x.t }));
     }
-    this.turnCache.set(id, turns);
-    if (this.turnCache.size > 40) this.turnCache.delete(this.turnCache.keys().next().value);
+    this.cacheTurns(id, turns);
     return turns;
   }
 
@@ -752,7 +761,7 @@ export class SessionIndex extends EventEmitter {
     if (!from && !meta.accountUuid) meta.accountUuid = await readAccountUuid(f.file);
     // No await from here on: meta and its turns always change together.
     this.meta.set(f.id, meta);
-    this.turnCache.set(f.id, turns);
+    this.cacheTurns(f.id, turns);
     if (from > 0) {
       this.pendingTurns.set(f.id, turns);
       return true;

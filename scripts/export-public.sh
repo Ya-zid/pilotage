@@ -19,8 +19,9 @@ if [ "${1:-}" = --replace ]; then REPLACE=1; shift; fi
 TARGET="${1:-$HOME/pilotage-public}"
 MARKER=".pilotage-export-in-progress"
 
-# Never published: personal history and private lists.
+# Never published: personal history, private lists, and audit notes (they list problems that may not be fixed yet).
 EXCLUDE=(
+  'AUDIT.md'
   'BUILD-LOG.md'
   'web/REVIEW-UX.md'
   'server/local-workspaces.json'
@@ -95,6 +96,9 @@ MESSAGE="${PILOTAGE_EXPORT_MESSAGE:-Pilotage ${VERSION:-0.1.0}}"
 
 rm -f "$TARGET/$MARKER"
 cd "$TARGET"
+# An inherited GIT_DIR / GIT_WORK_TREE (inside a git hook, some worktree setups) would point `git init` and
+# `git config` below at the source repository.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR
 git init -q -b main
 # Repo-local identity, so later commits in this copy never pick up a personal global e-mail either.
 git config user.name "$NAME"

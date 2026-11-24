@@ -89,6 +89,10 @@ dir here indexes its sessions (source `x-<hash>`), and `account` tells the accou
 
 ## 3. AI providers: `GET/PATCH /api/providers`, `POST /api/providers/test`
 
+PC-only: on the phone listener `PATCH /api/providers`, `POST /api/providers/test` and `PATCH /api/harnesses` answer
+`403 Only possible from the PC` (a stored key follows its preset, so changing the address from a phone could send
+the key elsewhere). The `GET`s work from phones.
+
 All AI work (digests, briefs, daily brief, CV) goes through one provider:
 
 | id | what | usage guard |
@@ -228,14 +232,19 @@ Rules:
 
   | Pilotage | codex | gemini |
   |---|---|---|
-  | `bypassPermissions` (default) | `--dangerously-bypass-approvals-and-sandbox` | `--approval-mode yolo` |
+  | `bypassPermissions` ("Skip all prompts") | `--dangerously-bypass-approvals-and-sandbox` | `--approval-mode yolo` |
   | `acceptEdits`, `auto` | `--full-auto` | `--approval-mode auto_edit` |
-  | `manual`, `plan`, `dontAsk` | (CLI defaults) | `--approval-mode default` |
+  | `default` (the default for new installs), `manual`, `plan`, `dontAsk`, and anything else | (none: Codex asks) | `--approval-mode default` |
+
+  Claude: `bypassPermissions` → `--dangerously-skip-permissions`; `manual` and any unknown value →
+  `--permission-mode default` (asks first; every Claude Code version accepts it); other known modes pass through.
+  Only the exact value `bypassPermissions` skips approvals. `POST /api/launch` answers 400 `Unknown permission mode`
+  for a value outside `bypassPermissions, acceptEdits, auto, manual, default, plan, dontAsk`.
 
 - The prompt goes through a 0600 file, as with Claude (`codex … -- "$PROMPT"`, `gemini --prompt-interactive="$PROMPT"`).
 - After launch, the record is `state: 'launched'` with a `note`. There is no session id, phone link or live state. The session
   appears in the list once the CLI writes its file (Codex after the first prompt).
-- Any launch, shell or attach whose folder path contains `;` fails with `Folder path contains ";" which Windows Terminal
+- Any launch, shell or attach whose folder path contains `;` or `"` fails with `Folder path contains ";" or '"' which Windows Terminal
   cannot handle safely`. Show that message as is.
 
 UI: in New Session, add a harness segmented control (Claude · Codex · Gemini) driven by `GET /api/harnesses`

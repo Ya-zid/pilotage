@@ -22,15 +22,21 @@ export class HttpError extends Error {
 
 // ---------------------------------------------------------------- folder planning (pure + fs checks)
 
+/**
+ * A folder name from a project name. Latin accents are dropped (Été café → ete-cafe), letters of every other script
+ * are kept (مشروع العيادة → مشروع-العيادة, Проект → проект), anything else becomes a dash; at most 60 characters.
+ */
 export function slugify(s) {
-  return String(s || '')
+  const latin = { ß: 'ss', ø: 'o', ł: 'l', đ: 'd', æ: 'ae', œ: 'oe', þ: 'th' };
+  const slug = String(s || '')
     .normalize('NFKD')
-    .replace(/[̀-ͯ]/g, '')
+    .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 60)
-    .replace(/-+$/, '');
+    .replace(/[ßøłđæœþ]/g, (c) => latin[c])
+    .normalize('NFC')
+    .replace(/[^\p{L}\p{N}]+/gu, '-')
+    .replace(/^-+|-+$/g, '');
+  return [...slug].slice(0, 60).join('').replace(/-+$/, '');
 }
 
 function realOr(p) {
@@ -61,7 +67,9 @@ function lexists(p) {
 export const tilde = (p, home = HOME) => (isInside(p, home) ? `~${p.slice(home.length)}` || '~' : p);
 
 function forbiddenRoots(home) {
-  return [...['.claude', '.ssh', '.gnupg', '.config', '.local', '.nvm', '.npm', '.cache', '.aws', '.kube', '.docker'].map((d) => path.join(home, d)), ROOT, DATA].map(realOr);
+  // The coding agents' own folders are read-only for Pilotage (Claude's, Codex's, Gemini's, wherever they live).
+  const agentDirs = [process.env.CLAUDE_CONFIG_DIR, process.env.CODEX_HOME].filter(Boolean);
+  return [...['.claude', '.codex', '.gemini', '.ssh', '.gnupg', '.config', '.local', '.nvm', '.npm', '.cache', '.aws', '.kube', '.docker'].map((d) => path.join(home, d)), ...agentDirs, ROOT, DATA].map(realOr);
 }
 
 /** Default parent: the folder that holds the source's top-level workspace folder (~/acme/x → ~). */
@@ -127,7 +135,9 @@ export function planFolder({ name, parentDir, sourcePath, home = HOME }) {
   const firstNew = missing.length ? path.join(realParent, missing[0]) : null;
   if (missing.length) realParent = path.join(realParent, ...missing);
   if (!isInside(realParent, realHome)) throw new HttpError(400, 'New projects must be inside your home folder');
-  if (forbiddenRoots(realHome).some((f) => isInside(realParent, f))) throw new HttpError(400, 'Projects cannot be created there');
+  // Compared case-insensitively too: on macOS ~/.SSH is ~/.ssh, and realpath keeps the spelling it was given.
+  const low = (p) => p.toLowerCase();
+  if (forbiddenRoots(realHome).some((f) => isInside(realParent, f) || isInside(low(realParent), low(f)))) throw new HttpError(400, 'Projects cannot be created there');
   const dir = path.join(realParent, slug);
   if (!isInside(dir, realHome) || dir === realHome) throw new HttpError(400, 'New projects must be inside your home folder');
   // Case-insensitive too: ~/acme next to ~/Acme would be confusing (and lands in the same workspace).

@@ -601,3 +601,39 @@ test('scout input: prompts that hand over a password are left out whole', async 
   for (const r of [a, b, c]) assert.ok(!/abcde|Hunter2|azerty/.test(r), r);
   assert.equal(cleanText('Build the WhatsApp bridge as its own repo', { dropCredentials: true }), 'Build the WhatsApp bridge as its own repo');
 });
+
+test('engine: automatic digests cover recent work only; year-old sessions and session-less repos wait for a manual run', () => {
+  const fx = sessions(); // S1 ended ~20 days ago, S2 2 days ago
+  const oldTurns = [
+    { t: NOW - 400 * DAY, o: 'h', p: 'Rewrite the old landing page', a: 'Done.' },
+    { t: NOW - 400 * DAY + 60e3, o: 'h', p: 'Add the pricing table', a: 'Added.' },
+  ];
+  fx.turns.OLD = oldTurns;
+  fx.metas.push({ id: 'OLD', cwd: P, startedAt: oldTurns[0].t, lastAt: oldTurns[1].t, lastHumanAt: oldTurns[1].t, turnCount: 2, counts: { h: 2, s: 0 }, entrypoint: 'cli', files: {} });
+  const project = fakeProject(fx);
+  const cloned = { id: hash('/x/cloned', 10), path: path.join(HOME_DIR, 'cloned-lib'), name: 'cloned-lib', workspace: 'cloned-lib', isGit: true, worktrees: new Map(), sessionIds: [], lastAt: 0, stack: [] };
+  const engine = new AIEngine({ index: fakeIndex(fx), registry: fakeRegistry([project, cloned]), store: fakeStore(), live: { get: () => null } });
+  const auto = engine.pendingBlocks().map((p) => p.meta.id);
+  assert.ok(auto.includes('S2'), 'recent work is summarized');
+  assert.ok(!auto.includes('OLD'), 'a 400-day-old session is not summarized automatically');
+  assert.ok(engine.pendingBlocks({ manual: true }).some((p) => p.meta.id === 'OLD'), '"Summarize now" still covers it');
+  assert.equal(engine.status().pendingBlocks, engine.pendingBlocks().length, 'the "left" count matches what will run');
+  assert.ok(!engine.pendingBriefs([]).some((b) => b.project.path === cloned.path), 'no automatic brief for a repo without sessions');
+});
+
+test('engine: "Pause" is kept in the settings, so a restart does not resume AI work', () => {
+  const fx = sessions();
+  const store = fakeStore();
+  let saves = 0;
+  store.save = () => saves++;
+  const first = new AIEngine({ index: fakeIndex(fx), registry: fakeRegistry([fakeProject(fx)]), store, live: { get: () => null } });
+  first.pausedByUser = true;
+  assert.equal(store.settings.ai.paused, true);
+  assert.ok(saves > 0, 'saved with the settings');
+  // A restart: a new engine over the same (saved) settings.
+  const second = new AIEngine({ index: fakeIndex(fx), registry: fakeRegistry([fakeProject(fx)]), store, live: { get: () => null } });
+  assert.equal(second.pausedByUser, true);
+  assert.equal(second.guard().ok, false);
+  second.pausedByUser = false;
+  assert.equal(store.settings.ai.paused, false);
+});

@@ -9,11 +9,11 @@ import { PatchFn, PathList, SettingRow, SettingRows, SettingsCard, cap } from '.
 
 // ---------------------------------------------------------------- new sessions
 const PERMISSION_OPTS: { value: string; label: string; hint: string }[] = [
-  { value: 'bypassPermissions', label: 'Skip all prompts', hint: 'Claude never stops to ask, like your usual sessions.' },
+  { value: 'bypassPermissions', label: 'Skip all prompts', hint: 'Claude runs commands and edits files without asking. Only for code you trust.' },
   { value: 'acceptEdits', label: 'Accept edits', hint: 'File edits go through on their own; commands still ask.' },
   { value: 'auto', label: 'Auto', hint: 'Routine actions run on their own; risky ones ask first.' },
   { value: 'plan', label: 'Plan first', hint: 'Claude proposes a plan before changing anything.' },
-  { value: 'manual', label: 'Ask every time', hint: 'Claude asks before edits and commands.' },
+  { value: 'default', label: 'Ask every time', hint: 'Claude asks before edits and commands. The default for new installs.' },
 ];
 
 const LAUNCH_MODELS = [

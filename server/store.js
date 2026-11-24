@@ -1,8 +1,7 @@
-// Persistent user state (overrides, ideas, settings) with atomic writes and daily backups.
-import fs from 'node:fs';
-import path from 'node:path';
+// Persistent user state (overrides, ideas, settings) with atomic writes and daily backups. A state.json that can't be
+// read (a hand edit, a crash mid-write) is kept aside and the newest readable backup is loaded (util.loadJSONObjectSync).
 import { paths } from './config.js';
-import { readJSONSync, writeJSONSync, debounce, isoDay, log } from './util.js';
+import { loadJSONObjectSync, backupDailySync, writeJSONSync, debounce, log } from './util.js';
 
 export const DEFAULT_SETTINGS = {
   /** Your name, as AI prompts and the Home greeting use it. Empty = detected (server/profile.js). */
@@ -12,6 +11,10 @@ export const DEFAULT_SETTINGS = {
   ai: {
     enabled: true,
     autoDigest: true,
+    /** Automatic summaries cover work from the last N days; older work only on "Summarize now". */
+    backfillDays: 30,
+    /** Paused by the user (Settings → AI): nothing automatic runs until resumed, across restarts. */
+    paused: false,
     digestModel: 'haiku',
     briefModel: 'haiku',
     cvModel: 'sonnet',
@@ -47,7 +50,9 @@ export const DEFAULT_SETTINGS = {
     harnesses: { codex: true, gemini: true },
   },
   launch: {
-    permissionMode: 'bypassPermissions',
+    /** New installs ask before commands and edits ("default", Claude Code's ask mode). "Skip all prompts"
+     * (bypassPermissions) is one click away in Settings → New sessions; installs from before 0.4.0 keep it. */
+    permissionMode: 'default',
     model: '',
     pcMode: 'terminal',
     phoneMode: 'background',
@@ -91,7 +96,11 @@ const EMPTY_STATE = {
 class StateStore {
   constructor(file) {
     this.file = file;
-    const loaded = readJSONSync(file, null);
+    const loaded = loadJSONObjectSync(file, paths.backups, 'state');
+    // Installs from before 0.4.0 defaulted to "Skip all prompts": keep that for them, so an upgrade never changes how
+    // their sessions start. Only new installs get the new "ask first" default.
+    if (loaded && loaded.settings && !loaded.settings.launch?.permissionMode) loaded.settings.launch = { ...(loaded.settings.launch || {}), permissionMode: 'bypassPermissions' };
+    if (loaded?.settings?.launch?.permissionMode === 'manual') loaded.settings.launch.permissionMode = 'default'; // older name of "Ask every time"
     this.data = deepMerge(EMPTY_STATE, loaded || {});
     this.data.settings = deepMerge(DEFAULT_SETTINGS, this.data.settings || {});
     this._save = debounce(() => this.saveNow(), 400);
@@ -101,24 +110,11 @@ class StateStore {
   }
   saveNow() {
     try {
-      if (fs.existsSync(this.file)) {
-        const day = isoDay(Date.now());
-        const daily = path.join(paths.backups, `state-${day}.json`);
-        if (!fs.existsSync(daily)) {
-          fs.copyFileSync(this.file, daily);
-          this.pruneBackups();
-        }
-      }
+      backupDailySync(this.file, paths.backups, 'state', 21);
       writeJSONSync(this.file, this.data);
     } catch (e) {
       log.error('state save failed', e);
     }
-  }
-  pruneBackups() {
-    try {
-      const files = fs.readdirSync(paths.backups).filter((f) => f.startsWith('state-')).sort();
-      for (const f of files.slice(0, Math.max(0, files.length - 21))) fs.unlinkSync(path.join(paths.backups, f));
-    } catch {}
   }
   get settings() {
     return this.data.settings;

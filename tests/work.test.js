@@ -466,6 +466,13 @@ test('slugging', () => {
   assert.equal(slugify('Été café'), 'ete-cafe');
   assert.equal(slugify('!!!'), '');
   assert.ok(slugify('a'.repeat(200)).length <= 60);
+  // Names in any script make a folder name (Arabic, Cyrillic, CJK), never "no letters or digits".
+  assert.equal(slugify('مشروع العيادة'), 'مشروع-العيادة');
+  assert.equal(slugify('Проект Почта'), 'проект-почта');
+  assert.equal(slugify('客户 提醒'), '客户-提醒');
+  assert.equal(slugify('Straße Søren Łódź'), 'strasse-soren-lodz');
+  assert.equal(slugify('../مشروع/..'), 'مشروع');
+  assert.ok([...slugify('ж'.repeat(200))].length <= 60);
 });
 
 test('spin-off folder: defaults to a sibling of the workspace folder, inside $HOME only', () => {
@@ -475,6 +482,11 @@ test('spin-off folder: defaults to a sibling of the workspace folder, inside $HO
     const plan = planFolder({ name: 'WhatsApp module', sourcePath: path.join(h.home, 'Acme', 'outreach'), home: h.home });
     assert.equal(plan.dir, path.join(h.home, 'whatsapp-module'));
     assert.equal(planFolder({ name: 'x', parentDir: '~/work', home: h.home }).dir, path.join(h.home, 'work', 'x'));
+    // The other agents' folders are read-only too, whatever the letter case (macOS folders are case-insensitive).
+    for (const d of ['.codex', '.gemini', '.SSH', '.Claude']) {
+      fs.mkdirSync(path.join(h.home, d), { recursive: true });
+      assert.throws(() => planFolder({ name: 'x', parentDir: `~/${d}`, home: h.home }), /cannot be created there/, d);
+    }
     rejects(() => planFolder({ name: 'x', parentDir: h.outside, home: h.home }), 400, /inside your home/);
     rejects(() => planFolder({ name: 'x', parentDir: '/', home: h.home }), 400, /inside your home/);
     rejects(() => planFolder({ name: 'x', parentDir: `${h.home}/../outside`, home: h.home }), 400, /\.\./);

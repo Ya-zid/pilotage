@@ -91,6 +91,18 @@ export function shortModel(m: string | null | undefined) {
   return m;
 }
 
+/** What holds background AI back, from the reason of the server's guard (server/ai/engine.js guard()). A provider
+ *  setup error ("AI provider problem: Claude is logged out…") needs the user in Settings → AI; the rest clear by
+ *  themselves (a temporary error, Pilotage's own call cap, or the 5-hour / 7-day usage limits). */
+export type AiHold = 'provider' | 'error' | 'cap' | 'usage';
+export function aiHold(reason: string | null | undefined): AiHold {
+  const r = reason || '';
+  if (r.startsWith('AI provider problem')) return 'provider';
+  if (/temporary error/i.test(r)) return 'error';
+  if (/\bcap\b/i.test(r)) return 'cap';
+  return 'usage';
+}
+
 export const STATUS_LABEL: Record<string, string> = {
   active: 'Active',
   idle: 'Idle',

@@ -4,7 +4,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DATA, PORT } from './config.js';
 
-const key = JSON.parse(fs.readFileSync(path.join(DATA, 'secrets.json'), 'utf8')).desktopKey;
+let key;
+try {
+  key = JSON.parse(fs.readFileSync(path.join(DATA, 'secrets.json'), 'utf8')).desktopKey;
+} catch {
+  // Before the first start there is no key yet: say what to do instead of a stack trace.
+  console.error(`Pilotage hasn't been started with this data folder yet (${DATA}). Start it first: pilotage start`);
+  process.exit(1);
+}
 const base = `http://127.0.0.1:${PORT}`;
 
 async function api(p, opts = {}) {
@@ -64,8 +71,14 @@ try {
     else if (!r.forwarder.running) console.log('\n\x1b[33mThe phone forwarder is not running: run `pilotage restart`.\x1b[0m');
   } else if (cmd === 'phone') {
     console.log('A Windows admin (UAC) prompt opens on the PC: click Yes. It adds one firewall rule for Pilotage (TCP 4748).');
-    const r = await fetch(`${base}/api/net/enable`, { method: 'POST', headers: { 'X-Pilotage-Key': key, 'X-Pilotage': '1', 'Content-Type': 'application/json' }, body: '{}' }).then((x) => x.json());
-    console.log(r.ok ? `\x1b[32mPhone access enabled.\x1b[0m${r.trustedSsid ? ` Trusted Wi-Fi: ${r.trustedSsid}.` : ''} Now run: pilotage pair` : `\x1b[31m${r.error || 'failed'}\x1b[0m`);
+    const trustWifi = args.includes('--trust-wifi');
+    const r = await fetch(`${base}/api/net/enable`, { method: 'POST', headers: { 'X-Pilotage-Key': key, 'X-Pilotage': '1', 'Content-Type': 'application/json' }, body: JSON.stringify({ trustWifi }) }).then((x) => x.json());
+    if (!r.ok) {
+      console.log(`\x1b[31m${r.error || 'failed'}\x1b[0m`);
+      process.exit(1);
+    }
+    console.log(`\x1b[32mPhone access enabled.\x1b[0m${r.trustedSsid ? ` Trusted Wi-Fi: ${r.trustedSsid}.` : ''} Now run: pilotage pair`);
+    if (r.wifi && !r.trustedSsid) console.log(`\x1b[33mWi-Fi "${r.wifi}" is not trusted, so phones on it are refused (VPN works). If it is your home network: pilotage phone --trust-wifi\x1b[0m`);
   } else if (cmd === 'projects') {
     const { projects } = await api('/api/projects');
     const f = (args[0] || '').toLowerCase();

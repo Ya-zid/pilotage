@@ -14,6 +14,16 @@ const FAKE_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'pilotage-api-home-'));
 fs.mkdirSync(path.join(FAKE_HOME, 'acme', 'shop'), { recursive: true });
 fs.writeFileSync(path.join(FAKE_HOME, 'acme', 'shop', 'CLAUDE.md'), '# Shop\n');
 const FAKE_WIN_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'pilotage-api-winhome-'));
+// A stand-in `claude` (found first, in the fake home): it records any AI call (`-p`) and answers `agents` with [].
+const AI_CALLED = path.join(FAKE_HOME, 'ai-called');
+fs.mkdirSync(path.join(FAKE_HOME, '.local', 'bin'), { recursive: true });
+fs.writeFileSync(path.join(FAKE_HOME, '.local', 'bin', 'claude'), `#!/bin/sh\ncase " $* " in *" -p "*) touch '${AI_CALLED}' ;; esac\necho '[]'\n`, { mode: 0o755 });
+// A tiny web build, so static serving is tested the same way with or without `pilotage build` (CI has none).
+const WEB_DIST = fs.mkdtempSync(path.join(os.tmpdir(), 'pilotage-api-dist-'));
+fs.mkdirSync(path.join(WEB_DIST, 'assets'));
+fs.writeFileSync(path.join(WEB_DIST, 'index.html'), '<!doctype html><title>app shell</title>');
+fs.writeFileSync(path.join(WEB_DIST, 'notes.txt'), 'private build note');
+fs.writeFileSync(path.join(WEB_DIST, 'assets', 'app.js'), 'console.log(1)');
 let proc;
 let cookie = '';
 let key = '';
@@ -32,7 +42,7 @@ async function waitUp() {
 }
 
 before(async () => {
-  proc = spawn(process.execPath, ['server/index.js'], { env: { ...process.env, HOME: FAKE_HOME, PILOTAGE_WIN_HOME: FAKE_WIN_HOME, PILOTAGE_DATA: DATA, PILOTAGE_PORT: String(PORT), PILOTAGE_LAN_INTERNAL_PORT: String(PORT - 1), PILOTAGE_NO_AI: '1', PILOTAGE_NO_FORWARDER: '1' }, stdio: 'ignore' });
+  proc = spawn(process.execPath, ['server/index.js'], { env: { ...process.env, HOME: FAKE_HOME, PILOTAGE_WIN_HOME: FAKE_WIN_HOME, PILOTAGE_WEB_DIST: WEB_DIST, PILOTAGE_DATA: DATA, PILOTAGE_PORT: String(PORT), PILOTAGE_LAN_INTERNAL_PORT: String(PORT - 1), PILOTAGE_NO_AI: '1', PILOTAGE_NO_FORWARDER: '1' }, stdio: 'ignore' });
   await waitUp();
   key = JSON.parse(fs.readFileSync(path.join(DATA, 'secrets.json'), 'utf8')).desktopKey;
   const lc = await fetch(`${base}/api/auth/login-code`, { method: 'POST', headers: { 'X-Pilotage-Key': key, 'X-Pilotage': '1', 'Content-Type': 'application/json' }, body: '{}' });
@@ -173,4 +183,66 @@ test('failed pairing attempts cannot lock out a valid code forever', async () =>
   const code = new URL((await r.json()).primary).searchParams.get('c');
   const ok = await fetch(`${base}/auth/pair?c=${code}`, { redirect: 'manual' });
   assert.equal(ok.status, 302);
+});
+
+test('junk codes cannot lock out a valid login or pairing code', async () => {
+  // Anyone who reaches a listener can send junk codes: a web page through the PC browser, a neighbour on the Wi-Fi.
+  for (let i = 0; i < 25; i++) {
+    await fetch(`${base}/auth/login?c=junk${i}`, { redirect: 'manual' });
+    await lanRequest(`/auth/pair?c=junk${i}`);
+  }
+  const lc = await fetch(`${base}/api/auth/login-code`, { method: 'POST', headers: { 'X-Pilotage-Key': key, 'X-Pilotage': '1', 'Content-Type': 'application/json' }, body: '{}' });
+  const login = new URL((await lc.json()).url).searchParams.get('c');
+  assert.equal((await fetch(`${base}/auth/login?c=${login}`, { redirect: 'manual' })).status, 302);
+  const pr = await post('/api/devices/pair', {});
+  const pair = new URL((await pr.json()).primary).searchParams.get('c');
+  assert.equal((await lanRequest(`/auth/pair?c=${pair}`)).status, 302);
+  // Junk is still slowed down once the limit is reached.
+  assert.equal((await lanRequest('/auth/pair?c=more-junk')).status, 429);
+});
+
+test('phone listener: AI provider and coding-tool settings are PC-only (stored keys could be sent to any host)', async () => {
+  const h = { cookie, 'X-Pilotage': '1', 'Content-Type': 'application/json' };
+  const hostile = JSON.stringify({ providers: { 'openai-compatible': { preset: 'openai', baseUrl: 'http://127.0.0.1:9/v1' } } });
+  assert.equal((await lanRequest('/api/providers', { method: 'PATCH', headers: h, body: hostile })).status, 403);
+  assert.equal((await lanRequest('/api/providers/test', { method: 'POST', headers: h, body: '{}' })).status, 403);
+  assert.equal((await lanRequest('/api/harnesses', { method: 'PATCH', headers: h, body: '{}' })).status, 403);
+  // Reading them still works from the phone, and the PC can still change them.
+  assert.equal((await lanRequest('/api/providers', { headers: { cookie } })).status, 200);
+  assert.equal((await lanRequest('/api/harnesses', { headers: { cookie } })).status, 200);
+  const pc = await fetch(`${base}/api/providers`, { method: 'PATCH', headers: h, body: JSON.stringify({ dailyCallCap: 300 }) });
+  assert.equal(pc.status, 200);
+});
+
+test('static files: encoded ../ cannot reach the app shell without a paired device; bad escapes are a 400', async () => {
+  assert.equal((await fetch(`${base}/assets/app.js`)).status, 200, 'hashed assets are public');
+  for (const p of ['/assets/..%2findex.html', '/assets/..%2fnotes.txt', '/assets/%2e%2e%2fnotes.txt', '/icon..%2f..%2fnotes.txt', '/assets/%252e%252e%252fnotes.txt']) {
+    const r = await fetch(base + p);
+    assert.ok(r.status === 401 || r.status === 404, `${p} gave ${r.status}`);
+    assert.doesNotMatch(await r.text(), /app shell|private build note/, p);
+  }
+  assert.equal((await get('/notes.txt')).status, 200, 'a paired device still gets every file');
+  assert.equal((await fetch(`${base}/assets/%E0%A4%A`)).status, 400);
+});
+
+test('a JSON body that is not an object is a 400, not a crash', async () => {
+  for (const body of ['null', '42', '"text"', 'true']) {
+    const r = await fetch(`${base}/api/ideas`, { method: 'POST', headers: { cookie, 'X-Pilotage': '1', 'Content-Type': 'application/json' }, body });
+    assert.equal(r.status, 400, body);
+  }
+});
+
+test('launch: an unknown permission mode is refused, never turned into "skip all prompts"', async () => {
+  const r = await post('/api/launch', { projectId: 'nope', permissionMode: 'bogus', prompt: 'hello' });
+  assert.equal(r.status, 400);
+  assert.match((await r.json()).error, /permission mode/i);
+});
+
+test('PILOTAGE_NO_AI=1 means no AI call at all, not even Settings → AI → Test', async () => {
+  const r = await post('/api/providers/test', {});
+  assert.equal(r.status, 200);
+  const j = await r.json();
+  assert.equal(j.ok, false);
+  assert.match(j.error, /PILOTAGE_NO_AI/);
+  assert.equal(fs.existsSync(AI_CALLED), false, 'claude -p was started');
 });

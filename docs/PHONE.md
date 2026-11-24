@@ -26,13 +26,14 @@ before forwarding a single byte:
 
 - **NetBird / Tailscale peers**: always allowed. These are encrypted WireGuard tunnels, and they work from anywhere.
 - **Wi-Fi / Ethernet neighbours**: only while the PC is on one of your *trusted* Wi-Fi networks (your home). Cafés,
-  hotels and campus networks never get in.
+  hotels and campus networks never get in. Enabling phone access trusts nothing by itself: you trust your home
+  network yourself (**Settings → Phone & security → Trust**, or `pilotage phone --trust-wifi` while on it).
 
 A Windows Firewall rule (added once with an admin prompt: **Settings → Phone & security → Enable phone access**, or
 `pilotage phone`) allows TCP 4748 for that one program, only from your Wi-Fi subnet and the VPN ranges.
 
 On the phone listener, every page and API call needs a paired device, and the PC-only actions (pairing, the device
-list, firewall and forwarder, keys) are refused even for a paired phone. The only things served without sign-in are
+list, firewall and forwarder, keys, AI providers and coding-tool sources) are refused even for a paired phone. The only things served without sign-in are
 `/healthz`, the pairing links, static icons and the manifest, and the Pilotage certificate (`/pilotage-ca.crt`, public).
 
 **Home Wi-Fi or VPN?** At home, Wi-Fi is fastest. Away, use NetBird (or Tailscale): install it on the PC and the phone,
@@ -122,19 +123,31 @@ PILOTAGE_LAN_BIND=0.0.0.0 pilotage restart     # or: PILOTAGE_LAN_BIND=0.0.0.0 n
 ```
 
 The phone listener then binds `0.0.0.0:4748` directly (`PILOTAGE_LAN_PORT` changes the port; you can also bind one
-address, e.g. your VPN IP). To keep it on, export the variable in your shell profile (`~/.bashrc`, `~/.zshrc`) so
+address, e.g. your VPN IP). `PILOTAGE_LAN_BIND=::` listens on IPv6 and IPv4 both (`[::]` works too), and an IPv6
+address binds just that address. To keep it on, export the variable in your shell profile (`~/.bashrc`, `~/.zshrc`) so
 every start sees it. On macOS, run `pilotage install` again after setting it: the login item copies the `PILOTAGE_*`
 variables of the shell it was installed from. Each connection is checked against an allow-list before anything is read:
 
 | `PILOTAGE_LAN_ALLOW` | Allowed |
 | --- | --- |
-| unset / `lan,vpn` | the subnets this machine is on right now (from its network interfaces, /16 or smaller), NetBird/Tailscale (`100.64.0.0/10` and the VPN interface's own subnet), loopback |
+| unset / `lan,vpn` | the subnets this machine is on right now, from its network interfaces (IPv4 /16 or smaller; IPv6 unique-local `fc00::/7` and global prefixes, /48 or smaller), NetBird/Tailscale (`100.64.0.0/10`, Tailscale's `fd7a:115c:a1e0::/48` and the VPN interfaces' own subnets), loopback |
 | `vpn` | VPN only: the right choice for a laptop that joins other people's Wi-Fi |
-| `vpn,192.168.1.0/24` | VPN plus an explicit subnet (keywords and IPv4 CIDRs can be mixed) |
+| `vpn,192.168.1.0/24` | VPN plus an explicit subnet (keywords, IPv4 and IPv6 CIDRs can be mixed: `vpn,2001:db8:1:2::/64`) |
+| `lan,vpn,fe80::/10` | also IPv6 link-local peers, which `lan` never includes on its own |
+
+IPv4 peers on a `::` bind arrive as `::ffff:192.168.1.5` and are checked as `192.168.1.5`, against the IPv4 entries
+only: no IPv6 range (not even `::/0`) lets an IPv4 peer in, and IPv4 ranges written in IPv6 form (`::ffff:…/…`) are
+ignored. So is any entry that doesn't parse: it allows nothing. The log line `phone listener on …` at start shows the
+list in force, and so does Settings → Phone access.
 
 There's no trusted-Wi-Fi check outside Windows: the `lan` rule allows whichever network you're on. Use `vpn` (plus your
 home subnet as a CIDR) if the machine moves around. Also allow the port in your firewall, for example
-`sudo ufw allow from 192.168.1.0/24 to any port 4748 proto tcp`; macOS asks the first time.
+`sudo ufw allow from 192.168.1.0/24 to any port 4748 proto tcp` (and `from fd7a:115c:a1e0::/48` for Tailscale over
+IPv6); macOS asks the first time.
+
+Over IPv6, use the `http://` address. The Pilotage certificate only covers IPv4 addresses (its authority may only
+sign for private IPv4 ranges and local names), so HTTPS and Install app need the PC's IPv4 address. A phone usually
+ends up on IPv6 when it connects by a VPN host name (`*.ts.net`, `*.netbird.cloud`) that resolves to both.
 
 Everything else (pairing, HTTPS, Install app) works the same. The same mode works on WSL with *mirrored* networking;
 the Windows forwarder is not started when `PILOTAGE_LAN_BIND` is set.

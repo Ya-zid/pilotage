@@ -239,7 +239,7 @@ export function SettingsCard({
 /** Quiet note shown instead of a PC-only control when this browser came in through the phone forwarder. */
 export function PcOnly({ text = 'Do this on the PC' }: { text?: string }) {
   return (
-    <span className="pc-only" title="Pairing, devices, the firewall and keys can only be changed from the PC itself">
+    <span className="pc-only" title="Pairing, devices, the firewall, keys and AI providers can only be changed from the PC itself">
       <Monitor size={13} aria-hidden="true" />
       {text}
     </span>

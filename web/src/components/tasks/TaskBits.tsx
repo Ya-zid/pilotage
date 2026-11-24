@@ -2,11 +2,12 @@
 // Follows docs/DESIGN.md: status = glyph, metadata = <Meta>, one primary line, tokens only (tasks.css).
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Link, useNavigate } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
-import { Bot, Check, CheckCircle2, Cloud, CornerDownRight, ExternalLink, Hourglass, Monitor, MoreHorizontal, Play, RotateCcw, Smartphone, Sparkles, Sun, SunDim, Trash2, TriangleAlert, Undo2, User, X } from 'lucide-react';
-import { api, terminalPlace, useBootstrap, useProjects, useTerminal } from '../../api';
-import { Button, CopyButton, IconButton, Meta, Modal, ProjectGlyph, SegmentedControl, Spinner, StatusIcon, Switch } from '../ui';
+import { Link } from 'react-router-dom';
+import { Bot, Check, Cloud, CornerDownRight, Hourglass, Monitor, MoreHorizontal, Play, RotateCcw, Sparkles, Sun, SunDim, Trash2, Undo2, User, X } from 'lucide-react';
+import { terminalPlace, useBootstrap, useProjects, useTerminal } from '../../api';
+import { SkipPromptsNote } from '../NewSession';
+import { LaunchStatus } from '../project/LaunchStatus';
+import { Button, IconButton, Meta, Modal, ProjectGlyph, SegmentedControl, StatusIcon, Switch } from '../ui';
 import type { Launch, ProjectSummary } from '../../types';
 import type { WorkItem, WorkStatus } from '../../types-extra';
 import { ago, fmtDate, fmtDateTime, isPhone } from '../../util';
@@ -535,73 +536,6 @@ export function TaskCard({
   );
 }
 
-// ---------------------------------------------------------------- launch progress (same UX as the New-session dialog)
-
-export function LaunchProgress({ launch, onClose }: { launch: Launch; onClose: () => void }) {
-  const navigate = useNavigate();
-  const { data } = useQuery({
-    queryKey: ['launch', launch.id],
-    queryFn: () => api<Launch>(`/api/launch/${launch.id}`),
-    initialData: launch,
-    refetchInterval: (q) => {
-      const d = q.state.data as Launch | undefined;
-      if (!d) return 1500;
-      if (d.bridgeUrl || d.state === 'error' || Date.now() - (d.createdAt || Date.now()) > 4 * 60_000) return false;
-      return 1500;
-    },
-  });
-  const l = data || launch;
-  const ready = !!l.bridgeUrl;
-  if (l.state === 'error')
-    return (
-      <div className="callout warn">
-        <TriangleAlert size={18} />
-        <div>
-          <div className="bold">Could not start the session</div>
-          <div className="small">{l.error || 'The launch failed. Try again from the PC.'}</div>
-        </div>
-      </div>
-    );
-  return (
-    <div className="launch-state">
-      <div className={`launch-icon${ready ? ' ok' : ''}`}>{ready ? <CheckCircle2 size={26} /> : <Spinner size={24} />}</div>
-      <div className="stack" style={{ gap: 6 }}>
-        <div className="launch-title">{ready ? `“${l.name}” is running` : l.mode === 'terminal' ? `Opening ${terminalPlace(l.terminal ?? null)} on your PC…` : 'Starting in the background…'}</div>
-        <div className="small muted readable" style={{ margin: '0 auto' }}>
-          {ready
-            ? l.mode === 'terminal'
-              ? `It is open in ${l.terminal || 'a terminal'}, and you can continue it from your phone.`
-              : 'It runs on your PC without a window. Continue it in the Claude app.'
-            : l.note || l.detail || 'Waiting for Claude to connect Remote Control…'}
-        </div>
-      </div>
-      {ready && (
-        <div className="stack" style={{ width: '100%', maxWidth: 360, gap: 10 }}>
-          <a className="btn primary block lg" href={l.bridgeUrl!} target="_blank" rel="noreferrer">
-            <Smartphone size={16} />
-            Open in Claude app
-            <ExternalLink size={14} />
-          </a>
-          <div className="cluster" style={{ justifyContent: 'center' }}>
-            <CopyButton text={l.bridgeUrl!} label="Copy link" />
-            {l.sessionId && (
-              <button
-                className="btn sm"
-                onClick={() => {
-                  onClose();
-                  navigate(`/sessions/${l.sessionId}`);
-                }}
-              >
-                View in Pilotage
-              </button>
-            )}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 // ---------------------------------------------------------------- detail sheet (inline edit + start)
 
 /** Due date field. Saves only a full, real date (a pick in the native picker, or the 4th digit of a typed year),
@@ -915,6 +849,7 @@ export function TaskSheet({ it, onClose }: { it: WorkItem; onClose: () => void }
               <div className="medium">{it.title}</div>
               <div className="tiny faint">Claude gets the title and details as its first prompt, and is asked to check in before anything risky.</div>
             </div>
+            {boot?.settings.launch.permissionMode === 'bypassPermissions' && <SkipPromptsNote />}
             {term && (
               <div className="field">
                 <label>Where</label>
@@ -944,7 +879,7 @@ export function TaskSheet({ it, onClose }: { it: WorkItem; onClose: () => void }
         )}
         {stage === 'launch' && launch && (
           <div className="modal-body" style={{ paddingTop: 10 }}>
-            <LaunchProgress launch={launch} onClose={onClose} />
+            <LaunchStatus launch={launch} onNavigate={onClose} />
           </div>
         )}
       </Modal>

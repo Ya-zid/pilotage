@@ -14,7 +14,10 @@ const SEEN_FILE = path.join(path.dirname(paths.ai), 'usage-seen.json');
 // A weekly reading stays valid until its window resets: Pilotage's own `claude -p` calls never refresh the statusline
 // file, so dropping it after hours without an interactive session would switch the weekly guard off.
 const SEVEN_KEEP = Infinity;
-const FIVE_KEEP = 30 * 60e3; // 5-hour readings must be fresh
+// The same for the 5-hour window: usage only rises inside a window, so an older reading is a safe lower bound until
+// its reset. Dropping it after 30 minutes reopened the guard exactly when the user stopped working and Pilotage ran
+// alone, which could use up the rest of the window.
+const FIVE_KEEP = Infinity;
 
 let seen = null;
 let lastSaved = 0;
@@ -57,7 +60,7 @@ export function usageNow() {
   const savedAt = (rl.saved_at || 0) * 1000;
 
   let five = null;
-  if (fresh(rl) && rl.five_hour && typeof rl.five_hour.used_percentage === 'number') {
+  if (rl.five_hour && typeof rl.five_hour.used_percentage === 'number' && (rl.five_hour.resets_at || 0) > now) {
     const r = recordReading(s.five, { pct: rl.five_hour.used_percentage, resetsAt: (rl.five_hour.resets_at || 0) * 1000, at: savedAt }, FIVE_KEEP, nowMs);
     if (r) five = { ...r, source: 'claude' };
   } else {

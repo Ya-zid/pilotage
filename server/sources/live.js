@@ -1,7 +1,7 @@
 // Live Claude sessions: interactive (terminal) and background (daemon) ones.
 import fs from 'node:fs';
 import path from 'node:path';
-import { CLAUDE_DIR, CLAUDE_BIN } from '../config.js';
+import { CLAUDE_DIR, CLAUDE_CMD } from '../config.js';
 import { run, readJSONSync, clip } from '../util.js';
 
 export function bridgeUrl(id) {
@@ -89,7 +89,7 @@ export class LiveTracker {
   async _refresh(full) {
     // `claude agents` costs a process spawn: run it at most every 30 s; in between, re-read the cheap state files.
     if (full || !this.agentsCache || Date.now() - this.agentsAt > 30_000) {
-      const r = await run(CLAUDE_BIN, ['agents', '--json', '--all'], { timeout: 20000 });
+      const r = await run(CLAUDE_CMD[0], [...CLAUDE_CMD.slice(1), 'agents', '--json', '--all'], { timeout: 20000 });
       if (r.code === 0) {
         try {
           this.agentsCache = JSON.parse(r.stdout);

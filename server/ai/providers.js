@@ -410,8 +410,15 @@ export async function callAI({ instruction, input = '', schema = null, model, ef
   const s = aiSettings();
   const id = PROVIDER_IDS.includes(provider) ? provider : currentProvider(s);
   const cfg = providerConfig(id, s);
+  // Every AI call passes here, so this is where PILOTAGE_NO_AI=1 ("never call an AI provider") holds for all of them,
+  // the Settings → AI → Test button included (demo worlds and experiments must not use the user's account).
+  if (process.env.PILOTAGE_NO_AI === '1') return { ok: false, error: 'AI is off for this server (PILOTAGE_NO_AI=1)', ms: 0, provider: id, notSent: true };
   const cap = capStatus(id);
   if (!cap.ok) return { ok: false, error: cap.reason, ms: 0, provider: id, capped: true };
+  // The one choke point for every job: inputs also carry CLAUDE.md and memory files, READMEs, commit messages, notes
+  // and ideas, which were never redacted (only transcripts are, at indexing). Mask secrets before anything leaves.
+  if (typeof input === 'string') input = redact(input);
+  if (typeof instruction === 'string') instruction = redact(instruction); // templates today; cheap insurance
   let r;
   try {
     if (id === 'codex-cli') r = await callCodex({ instruction, input, schema, model: cfg.model || '', effort, timeout });

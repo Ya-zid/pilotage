@@ -34,10 +34,10 @@ function opensslVerify(caFile, pem) {
 }
 
 /** One request to the test server. proto 'http' | 'https'; https verifies against the Pilotage CA unless ca === false. */
-function request({ proto = 'http', port = LAN, path: p = '/', method = 'GET', headers = {}, body, ca = caPem, host = LAN_HOST } = {}) {
+function request({ proto = 'http', port = LAN, path: p = '/', method = 'GET', headers = {}, body, ca = caPem, host = LAN_HOST, dial = '127.0.0.1' } = {}) {
   return new Promise((resolve, reject) => {
     const mod = proto === 'https' ? https : http;
-    const opts = { host: '127.0.0.1', port, path: p, method, headers: { host, ...headers }, agent: false };
+    const opts = { host: dial, port, path: p, method, headers: { host, ...headers }, agent: false };
     // Verify the chain against the Pilotage CA, and the name against the address we really dial (127.0.0.1 is in the
     // certificate), whatever Host header the test sends.
     if (proto === 'https') Object.assign(opts, ca ? { ca } : {}, { rejectUnauthorized: true, checkServerIdentity: (_h, cert) => nodeTls.checkServerIdentity('127.0.0.1', cert) });
@@ -251,6 +251,40 @@ test('bind mode: the phone listener binds LAN_PORT directly, speaks both protoco
   } finally {
     p.kill();
     await once(p, 'exit');
+    fs.rmSync(data, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
+test('bind mode on IPv6: PILOTAGE_LAN_BIND=[::1] listens on IPv6 and takes bracketed IPv6 hosts, never names', async (t) => {
+  if (!Object.values(os.networkInterfaces()).flat().some((a) => a?.address === '::1')) return t.skip('no IPv6 loopback here');
+  const data = fs.mkdtempSync(path.join(os.tmpdir(), 'pilotage-tls-bind6-'));
+  const port = PORT + 202;
+  const lanPort = PORT + 203;
+  const p = spawn(process.execPath, ['server/index.js'], {
+    env: { ...process.env, HOME: FAKE_HOME, PILOTAGE_WIN_HOME: FAKE_HOME, PILOTAGE_DATA: data, PILOTAGE_PORT: String(port), PILOTAGE_LAN_INTERNAL_PORT: String(port - 1), PILOTAGE_LAN_PORT: String(lanPort), PILOTAGE_LAN_BIND: '[::1]', PILOTAGE_LAN_ALLOW: 'vpn', PILOTAGE_NO_AI: '1', PILOTAGE_NO_FORWARDER: '1' },
+    stdio: 'ignore',
+  });
+  const get6 = (host, headers = {}, p2 = '/healthz') => request({ port: lanPort, dial: '::1', host, path: p2, headers });
+  try {
+    let up = null;
+    for (let i = 0; i < 120 && !up && p.exitCode === null; i++) {
+      try {
+        up = await get6(`[::1]:${lanPort}`);
+      } catch {}
+      if (!up) await new Promise((r) => setTimeout(r, 250));
+    }
+    assert.equal(up?.status, 200, `phone listener on [::1] (server exit code ${p.exitCode})`);
+    // what a phone on Tailscale's IPv6 range sends
+    assert.equal((await get6(`[fd7a:115c:a1e0::1]:${lanPort}`)).status, 200);
+    for (const h of [`localhost:${lanPort}`, `[localhost]:${lanPort}`, `[fe80::1%25eth0]:${lanPort}`]) assert.equal((await get6(h)).status, 421, h);
+    // still the phone listener: the desktop key counts for nothing there
+    const k = JSON.parse(fs.readFileSync(path.join(data, 'secrets.json'), 'utf8')).desktopKey;
+    assert.equal((await get6(`[::1]:${lanPort}`, { 'X-Pilotage-Key': k }, '/api/devices')).status, 401);
+    // bound to ::1 only: nothing answers on IPv4
+    await assert.rejects(request({ port: lanPort, path: '/healthz' }));
+  } finally {
+    p.kill();
+    if (p.exitCode === null) await once(p, 'exit');
     fs.rmSync(data, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
