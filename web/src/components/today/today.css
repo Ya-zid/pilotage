@@ -113,6 +113,14 @@ a.pulse-tile:hover {
   font-size: var(--fs-sm);
   color: var(--text-3);
 }
+/* first run: the welcome card under the header, the Guide line on its own row under New session */
+.home-welcome .empty {
+  padding-block: 44px 36px;
+}
+.home-welcome-guide {
+  flex-basis: 100%;
+  margin: 4px 0 0;
+}
 .home-more {
   align-items: center;
   justify-content: flex-start;

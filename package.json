@@ -1,6 +1,6 @@
 {
   "name": "pilotage-cli",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "A local web cockpit for your Claude Code (and Codex / Gemini CLI) sessions: projects, live sessions, AI summaries, tasks, phone access.",
   "keywords": [
     "claude-code",
@@ -21,7 +21,9 @@
     "url": "git+https://github.com/Ya-zid/pilotage.git"
   },
   "homepage": "https://github.com/Ya-zid/pilotage#readme",
-  "bugs": { "url": "https://github.com/Ya-zid/pilotage/issues" },
+  "bugs": {
+    "url": "https://github.com/Ya-zid/pilotage/issues"
+  },
   "bin": {
     "pilotage": "bin/pilotage"
   },

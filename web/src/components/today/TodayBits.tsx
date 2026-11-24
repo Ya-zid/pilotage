@@ -2,11 +2,12 @@
 // (HarnessTag and sortLive are also used by the Sessions/Live pages.)
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
+import { Link } from 'react-router-dom';
 import { Sparkles, Undo2 } from 'lucide-react';
 import { liveState } from '../cards';
 import { Spinner } from '../ui';
 import type { Overview, SessionSummary } from '../../types';
-import { fmtDate, fmtTime, plural } from '../../util';
+import { aiHold, fmtDate, fmtTime, plural } from '../../util';
 import './today.css';
 
 // ---------------------------------------------------------------- one global "AI is catching up" line
@@ -17,6 +18,9 @@ export function CatchingUp({ o }: { o: Overview }) {
   const pending = ai.enabled ? ai.pendingBlocks : 0;
   if (!firstIndex && pending <= 0) return null;
   const paused = !ai.guard.ok || ai.pausedByUser;
+  // The guard's own reason: a logged-out Claude or a bad key is not "usage", and only the user can fix it.
+  const hold = aiHold(ai.guard.reason);
+  const resumes = ai.guard.until && ai.guard.until > Date.now() ? `, resumes ${fmtTime(ai.guard.until)}` : '';
   const recentError = !!ai.stats.lastError && Date.now() - ai.stats.lastError.at < 3 * 3600e3;
   return (
     <div className="catchup" role="status">
@@ -31,7 +35,23 @@ export function CatchingUp({ o }: { o: Overview }) {
             Claude is catching up on your history <span className="num faint">({pending} left)</span>
           </>
         )}
-        {paused && !firstIndex && <span className="faint"> · {ai.pausedByUser ? 'paused in Settings' : ai.guard.until ? `waiting for usage to drop, resumes ${fmtTime(ai.guard.until)}` : 'waiting for usage to drop'}</span>}
+        {paused && !firstIndex && (
+          <span className="faint">
+            {' · '}
+            {ai.pausedByUser ? (
+              'paused in Settings'
+            ) : hold === 'provider' ? (
+              <>
+                {ai.guard.reason} ·{' '}
+                <Link to="/settings#ai" className="link">
+                  Fix in Settings
+                </Link>
+              </>
+            ) : (
+              `${ai.guard.reason || 'paused for now'}${resumes}`
+            )}
+          </span>
+        )}
         {recentError && !paused && <span className="faint catchup-extra"> · some summaries failed and will be retried</span>}
       </span>
     </div>

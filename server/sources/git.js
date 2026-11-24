@@ -5,10 +5,14 @@ import path from 'node:path';
 import { run, pLimit, clip } from '../util.js';
 
 const limit = pLimit(4);
-// Repos found on disk are untrusted: a repo's own config could make `git status` run commands
-// (core.fsmonitor), so every call disables fsmonitor, hooks and pagers, and never prompts.
-const SAFE = ['--no-optional-locks', '-c', 'core.fsmonitor=false', '-c', 'core.untrackedCache=false', '-c', 'core.hooksPath=/dev/null', '-c', 'core.pager=cat', '-c', 'diff.external=', '-c', 'protocol.allow=never'];
-const GIT_ENV = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0', GIT_PAGER: 'cat', GIT_EXTERNAL_DIFF: '' };
+// Repos found on disk are untrusted (an unpacked archive can ship its own .git/config): a repo's own config could make
+// git run commands. Every call disables fsmonitor, hooks, pagers and signature checks (log.showSignature would run
+// gpg.program, gpg.ssh.program...), and never prompts. Filters are handled in statusOf().
+const SAFE = ['--no-optional-locks', '-c', 'core.fsmonitor=false', '-c', 'core.untrackedCache=false', '-c', 'core.hooksPath=/dev/null', '-c', 'core.pager=cat', '-c', 'diff.external=', '-c', 'protocol.allow=never', '-c', 'log.showSignature=false'];
+// No network or helper programs either: GIT_ALLOW_PROTOCOL='' allows no transport at all (it overrides a repo's own
+// protocol.<name>.allow, unlike -c protocol.allow=never), so a partial clone can't lazily "fetch" through an ext::
+// command, core.sshCommand or a credential helper; GIT_NO_LAZY_FETCH (git 2.45+) says the same thing directly.
+const GIT_ENV = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0', GIT_PAGER: 'cat', GIT_EXTERNAL_DIFF: '', GIT_ALLOW_PROTOCOL: '', GIT_NO_LAZY_FETCH: '1' };
 const G = (dir, args, timeout = 10000) => limit(() => run('git', [...SAFE, '-C', dir, ...args], { timeout, env: GIT_ENV }));
 
 /** If dir is a git worktree, return {mainRoot, gitdir}; if a main repo, {mainRoot: dir}; else null. */
@@ -46,10 +50,47 @@ export function webUrlFromRemote(remote) {
   return null;
 }
 
+// `git status` runs the clean/process filter of any file whose stat data changed, and a filter can be any command.
+// The user's own filters (global/system config, e.g. git-lfs) are fine; a repo's own ones only when they are the
+// well-known git-lfs / git-crypt commands (found on PATH, never a path into the repo, no shell syntax).
+const KNOWN_FILTER = /^"?git-(lfs|crypt)"? (clean|smudge|filter-process)( -- %f)?$/;
+// Config keys whose value is a program `git status` may run: filters, and git-lfs's extensions and transfer agents
+// (git-lfs runs those even through the user's own, global lfs filter).
+const RISKY_KEYS = '^(filter\\..*\\.(clean|smudge|process)|lfs\\.extension\\..*|lfs\\.customtransfer\\..*|lfs\\.standalonetransferagent)$';
+/**
+ * Does `git config --null --show-scope --get-regexp RISKY_KEYS` (exit code, output) show a repo's own program?
+ * Fails closed: an error (old git without --show-scope, a timeout) or output it can't read counts as yes.
+ * Pure; tested. Output entries are "scope\0key\nvalue\0", and values may contain newlines.
+ */
+export function riskyConfig(code, stdout) {
+  if (code === 1) return false; // no such key anywhere
+  if (code !== 0) return true;
+  const parts = String(stdout || '').split('\0');
+  if (parts[parts.length - 1] === '') parts.pop();
+  if (parts.length % 2) return true;
+  for (let i = 0; i < parts.length; i += 2) {
+    const scope = parts[i];
+    const nl = parts[i + 1].indexOf('\n');
+    if (!/^\w+$/.test(scope) || nl === -1) return true;
+    if (scope !== 'local' && scope !== 'worktree') continue; // the user's own (global/system) config
+    const key = parts[i + 1].slice(0, nl);
+    const value = parts[i + 1].slice(nl + 1);
+    if (key.startsWith('filter.') && KNOWN_FILTER.test(value)) continue; // plain git-lfs / git-crypt, nothing else
+    return true;
+  }
+  return false;
+}
+async function repoDefinesPrograms(dir) {
+  const r = await G(dir, ['config', '--null', '--show-scope', '--get-regexp', RISKY_KEYS]);
+  return riskyConfig(r.code, r.stdout);
+}
+
 /** Status of one checkout (repo or worktree). */
 export async function statusOf(dir) {
+  if (await repoDefinesPrograms(dir)) return { ok: false, error: 'This repo defines its own git filters, so Pilotage does not run git status in it', checkedAt: Date.now() };
   const [st, last, remote, recent] = await Promise.all([
-    G(dir, ['status', '--porcelain=v2', '--branch', '--untracked-files=normal']),
+    // Submodules have their own config (and filters): don't recurse into them.
+    G(dir, ['status', '--porcelain=v2', '--branch', '--untracked-files=normal', '--ignore-submodules=all']),
     G(dir, ['log', '-1', '--format=%cI%x1f%s%x1f%an']),
     G(dir, ['remote', 'get-url', 'origin']),
     G(dir, ['rev-list', '--count', '--since=30.days', 'HEAD']),

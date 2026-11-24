@@ -7,7 +7,7 @@ import { useHarnesses } from '../../api-extra';
 import type { Harness, HarnessesPatch, HarnessesResponse, HarnessInfo } from '../../types-extra';
 import { EmptyState, ErrorBox, LoadingCard, Meta, Switch, useToast } from '../ui';
 import { ago, fmtDateTime, plural } from '../../util';
-import { PathList, SettingRow, SettingRows, SettingsCard, errMsg } from './common';
+import { PathList, PcOnly, SettingRow, SettingRows, SettingsCard, errMsg, useViaLan } from './common';
 
 const SOURCE_LABEL: Record<string, string> = { wsl: 'WSL', win: 'Windows', history: 'history', 'win-history': 'Windows history' };
 const sourceLabel = (s: string) => SOURCE_LABEL[s] || (s.startsWith('x-') ? 'extra folder' : s);
@@ -65,6 +65,7 @@ export function SourcesSection() {
 
 function HarnessesCard({ data }: { data: HarnessesResponse }) {
   const patch = usePatchHarnesses();
+  const viaLan = useViaLan();
   const [busy, setBusy] = useState<string | null>(null);
   const toggle = async (h: HarnessInfo, on: boolean) => {
     setBusy(h.id);
@@ -72,8 +73,8 @@ function HarnessesCard({ data }: { data: HarnessesResponse }) {
     setBusy(null);
   };
   return (
-    <SettingsCard title="Coding tools" icon={<Layers />} description="Pilotage reads sessions from these tools, side by side. It never changes their files." flush>
-      <div className="list">
+    <SettingsCard title="Coding tools" icon={<Layers />} description="Pilotage reads sessions from these tools, side by side. It never changes their files." actions={viaLan ? <PcOnly text="Change on the PC" /> : null} flush>
+      <fieldset className="list bare-fieldset" disabled={viaLan}>
         {data.harnesses.map((h) => (
           <div key={h.id} className="lrow harness-row">
             <div className="lrow-lead">
@@ -101,7 +102,7 @@ function HarnessesCard({ data }: { data: HarnessesResponse }) {
             </div>
           </div>
         ))}
-      </div>
+      </fieldset>
     </SettingsCard>
   );
 }
@@ -109,9 +110,10 @@ function HarnessesCard({ data }: { data: HarnessesResponse }) {
 function AccountsCard({ data }: { data: HarnessesResponse }) {
   const patch = usePatchHarnesses();
   const saveDirs = async (next: string[], added: string | null) => patch({ extraClaudeDirs: next }, added ? 'Folder added' : 'Folder removed');
+  const viaLan = useViaLan();
   return (
-    <SettingsCard title="Claude accounts" icon={<Users />} description="Accounts seen in your Claude transcripts, and where Pilotage looks for them.">
-      <div className="stack-lg">
+    <SettingsCard title="Claude accounts" icon={<Users />} description="Accounts seen in your Claude transcripts, and where Pilotage looks for them." actions={viaLan ? <PcOnly text="Change on the PC" /> : null}>
+      <fieldset className="stack-lg bare-fieldset" disabled={viaLan}>
         {data.accounts.length === 0 ? (
           <EmptyState compact title="No accounts seen yet" body="Older transcripts don't record which account wrote them." />
         ) : (
@@ -158,7 +160,7 @@ function AccountsCard({ data }: { data: HarnessesResponse }) {
             </div>
           </SettingRow>
         </SettingRows>
-      </div>
+      </fieldset>
     </SettingsCard>
   );
 }

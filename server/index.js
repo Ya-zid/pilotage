@@ -20,10 +20,10 @@ import { listDevServers, stopDevServer } from './sources/processes.js';
 import { AIEngine } from './ai/engine.js';
 import { usageNow } from './ai/usage.js';
 import { Views } from './views.js';
-import { launch, getLaunch, listLaunches, attachTerminal, stopBackground, openVSCode, openExplorer, openShell, openUrlOnPC, sanitizeName, terminal } from './launch.js';
+import { launch, getLaunch, listLaunches, attachTerminal, stopBackground, openVSCode, openExplorer, openShell, openUrlOnPC, sanitizeName, terminal, PERMISSION_MODES } from './launch.js';
 import { trustState, trustFolder } from './claude-trust.js';
 import { tilde as tildePath } from './work/spinoff.js';
-import { windowsAddresses, forwarderStatus, ensureForwarder, enablePhoneAccess, stopForwarder, phoneAccessStatus, firewallRuleExists, setTrustedSsid, phoneAddresses, phoneUrls, lanConnectionAllowed, lanAllowList, LAN_BIND, LAN_MODE } from './net.js';
+import { windowsAddresses, forwarderStatus, ensureForwarder, reviveForwarder, enablePhoneAccess, stopForwarder, phoneAccessStatus, firewallRuleExists, setTrustedSsid, phoneAddresses, phoneUrls, lanConnectionAllowed, lanAllowList, LAN_BIND, LAN_BIND_LABEL, LAN_MODE } from './net.js';
 import { ensureTls, tlsStatus, caCertDer, noteHandshakeFailure } from './tls.js';
 import { log, clip, randomToken, isInside, hash } from './util.js';
 
@@ -112,11 +112,15 @@ function readBody(req, max = 1024 * 1024) {
     });
     req.on('end', () => {
       if (!chunks.length) return resolve({});
+      let v;
       try {
-        resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+        v = JSON.parse(Buffer.concat(chunks).toString('utf8'));
       } catch {
-        reject(new Error('Invalid JSON'));
+        return reject(new Error('Invalid JSON'));
       }
+      // Handlers read fields off the body: `null`, numbers and strings would throw there (a 500 and a stack trace).
+      if (v === null || typeof v !== 'object') return reject(new Error('JSON object expected'));
+      resolve(v);
     });
     req.on('error', reject);
   });
@@ -139,8 +143,9 @@ const MIME = {
   '.txt': 'text/plain; charset=utf-8',
 };
 
+/** `rel` is an already decoded, normalised path (see the static section of handle()): never decode it again. */
 function serveStatic(req, res, pathname) {
-  let rel = decodeURIComponent(pathname).replace(/^\/+/, '');
+  let rel = pathname.replace(/^\/+/, '');
   if (!rel) rel = 'index.html';
   const file = path.join(WEB_DIST, rel);
   if (!isInside(file, WEB_DIST)) return false;
@@ -220,7 +225,9 @@ function noteNotPaired(req, where) {
 const routes = [];
 // opts.localOnly: refuse when the request came through the phone/LAN listener (pairing, devices, firewall, keys).
 const route = (method, pattern, handler, opts = {}) => routes.push({ method, rx: new RegExp(`^${pattern}$`), handler, localOnly: !!opts.localOnly });
-const LOCAL_ONLY = [/^\/api\/devices(\/|$)/, /^\/api\/net\//, /^\/api\/security\//, /^\/api\/auth\//];
+// AI providers and coding-tool sources are PC-only too: a stored API key follows its preset, so a phone that could
+// change the base URL could send the key to any host (or read 127.0.0.1-only services through the Test call).
+const LOCAL_ONLY = [/^\/api\/devices(\/|$)/, /^\/api\/net\//, /^\/api\/security\//, /^\/api\/auth\//, /^\/api\/providers(\/|$)/, /^\/api\/harnesses$/];
 
 // The web build that is on disk now. Open pages compare it with the one they loaded and offer a reload after a deploy.
 let buildMemo = { mtime: -1, id: '' };
@@ -461,6 +468,8 @@ async function trustBeforeLaunch(cwd, asked, why) {
 }
 
 route('POST', '/api/launch', async (req, res, { body, dev }) => {
+  // A typo must never become "skip all prompts": refuse what isn't a known mode (launch.js also fails closed).
+  if (body.permissionMode != null && body.permissionMode !== '' && !PERMISSION_MODES.has(body.permissionMode)) return fail(res, 400, 'Unknown permission mode');
   const t = launchTarget(body);
   if (t.error) return fail(res, t.status, t.error);
   const { cwd, projectName } = t;
@@ -660,7 +669,8 @@ route('PATCH', '/api/settings', async (req, res, { body }) => {
   }
   if (s.launch) {
     clean.launch = {};
-    if (['bypassPermissions', 'acceptEdits', 'auto', 'manual', 'plan'].includes(s.launch.permissionMode)) clean.launch.permissionMode = s.launch.permissionMode;
+    if (['bypassPermissions', 'acceptEdits', 'auto', 'default', 'plan'].includes(s.launch.permissionMode)) clean.launch.permissionMode = s.launch.permissionMode;
+    else if (s.launch.permissionMode === 'manual') clean.launch.permissionMode = 'default'; // older name of "Ask every time"
     if (['', 'opus', 'sonnet', 'haiku', 'fable'].includes(s.launch.model)) clean.launch.model = s.launch.model;
     if (['terminal', 'background'].includes(s.launch.pcMode)) clean.launch.pcMode = s.launch.pcMode;
     if (['terminal', 'background'].includes(s.launch.phoneMode)) clean.launch.phoneMode = s.launch.phoneMode;
@@ -760,8 +770,9 @@ route('POST', '/api/net/forwarder', async (req, res) => {
   json(res, { ...r, forwarder: forwarderStatus() });
 });
 // One click in the morning: UAC prompt → firewall rule → forwarder started.
-route('POST', '/api/net/enable', async (req, res) => {
-  const r = await enablePhoneAccess();
+route('POST', '/api/net/enable', async (req, res, { body }) => {
+  // The current Wi-Fi is trusted only when asked for (Settings shows a Trust button; `pilotage phone --trust-wifi`).
+  const r = await enablePhoneAccess({ trustWifi: body?.trustWifi === true });
   setTimeout(() => broadcast('net'), 3000);
   json(res, { ...r, status: await phoneAccessStatus() }, r.ok ? 200 : 500);
 });
@@ -773,7 +784,7 @@ route('POST', '/api/net/trust', async (req, res, { body }) => {
   json(res, await phoneAccessStatus());
 });
 route('POST', '/api/net/stop', async (req, res) => {
-  const r = await stopForwarder();
+  const r = await stopForwarder({ byUser: true });
   setTimeout(() => broadcast('net'), 2000);
   json(res, r);
 });
@@ -841,7 +852,8 @@ async function handle(req, res) {
   if (!hostAllowed(req.headers.host, viaLan)) return fail(res, 421, 'Unrecognized host');
   const html = (status, body) => send(res, status, pairPage(body), { 'Content-Type': 'text/html; charset=utf-8' });
 
-  if (pathname === '/healthz') return json(res, { ok: true, version: VERSION, app: 'pilotage' });
+  // The pid lets `pilotage stop` find the server however it was started; only on the PC listener.
+  if (pathname === '/healthz') return json(res, { ok: true, version: VERSION, app: 'pilotage', ...(viaLan ? {} : { pid: process.pid }) });
 
   // The Pilotage CA *certificate* (public, no key): DER, which Android and iOS offer to install. No sign-in needed,
   // since the phone needs it before https works. Nothing else under data/tls is ever served.
@@ -857,8 +869,11 @@ async function handle(req, res) {
     return html(410, '<p>This link is outdated. Use the Pilotage shortcut on your Desktop, or run <code>pilotage open</code> in WSL.</p>');
   }
   if (pathname === '/auth/pair' || pathname === '/auth/login') {
+    // A valid code always works. Codes are 144-bit random, so guessing is hopeless anyway; past the failure limit,
+    // junk only gets 429 instead of 403. Checking the limit first would let anyone who can reach a listener (a web
+    // page through the PC browser, a Wi-Fi neighbour) lock the owner out by sending 20 junk codes.
     const bucket = viaLan ? 'pair-lan' : 'pair-local';
-    if (authBlocked(bucket)) return html(429, '<p>Too many failed attempts. Wait a few minutes.</p>');
+    const tooMany = () => html(429, '<p>Too many failed attempts. Wait a few minutes.</p>');
     const already = authenticate(req);
     const c = url.searchParams.get('c') || '';
     if (already) {
@@ -867,6 +882,7 @@ async function handle(req, res) {
     }
     const kind = secrets.consumePairCode(c);
     if (kind === 'desktop' && viaLan) {
+      if (authBlocked(bucket)) return tooMany();
       authFailed(bucket);
       return html(403, '<p>This login link only works on the PC itself.</p>');
     }
@@ -875,6 +891,7 @@ async function handle(req, res) {
       broadcast('devices');
       return send(res, 302, '', { Location: kind === 'desktop' ? '/' : '/?paired=1', 'Set-Cookie': deviceCookie(token) });
     }
+    if (authBlocked(bucket)) return tooMany();
     authFailed(bucket);
     noteNotPaired(req, 'pairing link');
     return html(403, '<p>This code is expired or was already used.</p>' + NOT_PAIRED_PAGE);
@@ -919,14 +936,21 @@ async function handle(req, res) {
 
   // Static app. Public assets are harmless; the app shell needs a paired device.
   if (req.method !== 'GET' && req.method !== 'HEAD') return fail(res, 405, 'Method not allowed');
-  const isAsset = /^\/(assets\/|icon|favicon|manifest|apple-touch)/.test(pathname);
-  if (isAsset && serveStatic(req, res, pathname)) return;
+  // Decide on the decoded, normalised path, decoded once: `/assets/..%2findex.html` is the app shell, not an asset.
+  let staticPath;
+  try {
+    staticPath = path.posix.normalize('/' + decodeURIComponent(pathname));
+  } catch {
+    return fail(res, 400, 'Bad path');
+  }
+  const isAsset = /^\/(assets\/|icon|favicon|manifest|apple-touch)/.test(staticPath);
+  if (isAsset && serveStatic(req, res, staticPath)) return;
   const dev = authenticate(req);
   if (!dev) {
     noteNotPaired(req, 'page');
     return html(401, NOT_PAIRED_PAGE);
   }
-  if (pathname !== '/' && serveStatic(req, res, pathname)) return;
+  if (staticPath !== '/' && serveStatic(req, res, staticPath)) return;
   if (!fs.existsSync(path.join(WEB_DIST, 'index.html'))) return send(res, 503, pairPage('<p>The web app is not built yet. Run <code>pilotage build</code>.</p>'), { 'Content-Type': 'text/html; charset=utf-8' });
   serveStatic(req, res, '/index.html');
 }
@@ -1152,7 +1176,7 @@ async function start() {
   // The inner http/https servers never listen() themselves, but Node only enforces headersTimeout/requestTimeout
   // (slow-client protection) once a server emits 'listening'.
   for (const s of [lanHttp, lanHttps]) s.emit('listening');
-  if (LAN_BIND) log.info(`phone listener on ${LAN_BIND}:${LAN_PORT} (PILOTAGE_LAN_BIND), allowed from ${lanAllowList().join(', ')}`);
+  if (LAN_BIND) log.info(`phone listener on ${LAN_BIND_LABEL} (PILOTAGE_LAN_BIND), allowed from ${lanAllowList().join(', ')}`);
   refreshTls(true).catch((e) => log.warn('tls', e.message));
   startRelayWatchdog();
   fs.writeFileSync(path.join(paths.logs, '..', 'pilotage.pid'), String(process.pid));
@@ -1192,6 +1216,11 @@ async function start() {
     ensureForwarder()
       .then((r) => log.info('forwarder', JSON.stringify(r)))
       .catch((e) => log.warn('forwarder', e.message));
+    every(60000, async () => {
+      const r = await reviveForwarder();
+      if (r?.ok && !r.already) log.info('forwarder was not running, started it again', JSON.stringify(r));
+      else if (r && !r.ok) log.warn('forwarder was not running and could not be started again', JSON.stringify(r));
+    });
   }
 }
 
@@ -1200,6 +1229,11 @@ function shutdown(sig) {
   store.saveNow();
   ai.saveNow();
   index.flushNow();
+  // A stale pid file would point `pilotage stop` at whatever process reuses the number later.
+  const pidFile = path.join(paths.logs, '..', 'pilotage.pid');
+  try {
+    if (fs.readFileSync(pidFile, 'utf8').trim() === String(process.pid)) fs.rmSync(pidFile, { force: true });
+  } catch {}
   process.exit(0);
 }
 process.on('SIGTERM', () => shutdown('SIGTERM'));

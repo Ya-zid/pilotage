@@ -4,11 +4,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { ChevronRight, MoreHorizontal, Play, Plus, Smartphone, Sparkles, SunDim, X } from 'lucide-react';
+import { ChevronRight, MoreHorizontal, Play, Plus, Smartphone, Sparkles, SquareTerminal, SunDim, X } from 'lucide-react';
 import { useBootstrap, useDevices, useNet } from '../../api';
 import { pickupHide, planFocus, useWork } from '../../api-extra';
 import { useApp } from '../AppContext';
-import { Button, Callout, Card, Meta, PageHeader, ProjectGlyph, Section, StatusIcon, useToast } from '../ui';
+import { Button, Callout, Card, EmptyState, Meta, PageHeader, ProjectGlyph, Section, StatusIcon, useToast } from '../ui';
 import { Menu, TaskRow, TaskSheet, useProjectIndex } from '../tasks/TaskBits';
 import { friendly, usePref, useTaskActions } from '../tasks/model';
 import type { Overview, SessionSummary } from '../../types';
@@ -161,6 +161,40 @@ export function PulseTiles({ o, needs, working }: { o: Overview; needs: number; 
         <span className="pt-value num">{todo}</span>
       </Link>
     </nav>
+  );
+}
+
+// ---------------------------------------------------------------- 1b. first run (no session indexed yet)
+
+/** In place of the pulse tiles while there is no session at all: why the page is empty and the one next step. */
+export function Welcome({ phone }: { phone: boolean }) {
+  const { openNewSession } = useApp();
+  return (
+    <Card className="home-welcome">
+      <EmptyState
+        icon={<SquareTerminal />}
+        title={`No Claude Code sessions on ${phone ? 'your computer' : 'this computer'} yet`}
+        body={
+          <>
+            Home fills in as you work: what is running, what needs you, your tasks for today and where you left off. Start a first session here, or run <span className="mono">claude</span> in any
+            terminal and it shows up by itself.
+          </>
+        }
+        action={
+          <>
+            <Button variant="primary" icon={<Plus />} onClick={() => openNewSession({})}>
+              New session
+            </Button>
+            <p className="home-welcome-guide">
+              New to Pilotage?{' '}
+              <Link to="/guide" className="link">
+                How Pilotage works
+              </Link>
+            </p>
+          </>
+        }
+      />
+    </Card>
   );
 }
 

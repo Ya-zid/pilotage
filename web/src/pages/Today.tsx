@@ -1,10 +1,11 @@
 // Home (route `/`): how things stand, in one calm column. Order and rules: docs/SIMPLIFY.md §4.
 // Header (greeting + date) → pulse tiles → Needs you → Running → Today → Pick up. No prose until a row is tapped.
+// First run (no session indexed yet): one welcome with New session in place of the zero tiles.
 import { useOverview } from '../api';
 import { liveState } from '../components/cards';
 import { Button, Card, EmptyState, PageHeader, Skeleton } from '../components/ui';
 import { CatchingUp, HomeUndoToast, sortLive } from '../components/today/TodayBits';
-import { HomeHeader, NeedsYou, PhoneSetup, PickUp, PulseTiles, Running, TodayPlan, homeTitle, useUserName } from '../components/today/HomeSections';
+import { HomeHeader, NeedsYou, PhoneSetup, PickUp, PulseTiles, Running, TodayPlan, Welcome, homeTitle, useUserName } from '../components/today/HomeSections';
 import { TaskUndoToast } from '../components/tasks/TaskBits';
 import { friendly, useMedia, useTick } from '../components/tasks/model';
 import './Today.css';
@@ -51,16 +52,19 @@ export default function Today() {
   const needs = live.filter((s) => liveState(s) === 'needs-you');
   const working = live.filter((s) => liveState(s) === 'working');
   const idle = live.filter((s) => liveState(s) === 'idle_live');
+  // Nothing indexed once the first scan is done: a new user (no ~/.claude history yet), not a quiet day.
+  const fresh = o.counts.sessions === 0 && o.index.firstDone && !o.live.length;
+  const tasks = o.plan?.today.length || 0;
 
   return (
     <div className="home">
       <HomeHeader />
-      <PulseTiles o={o} needs={needs.length} working={working.length} />
+      {fresh ? <Welcome phone={phone} /> : <PulseTiles o={o} needs={needs.length} working={working.length} />}
       <CatchingUp o={o} />
       {!phone && <PhoneSetup />}
       <NeedsYou list={needs} />
       <Running working={working} idle={idle} />
-      <TodayPlan o={o} />
+      {(!fresh || tasks > 0) && <TodayPlan o={o} />}
       <PickUp items={o.pickup || []} phone={phone} />
       <TaskUndoToast />
       <HomeUndoToast />

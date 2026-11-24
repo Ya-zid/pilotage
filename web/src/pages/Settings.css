@@ -249,6 +249,17 @@
   padding-top: 6px;
 }
 
+/* A card whose controls are PC-only: on the phone they stay readable but can't be used. */
+.bare-fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+.bare-fieldset:disabled {
+  opacity: 0.65;
+}
+
 .pc-only {
   display: inline-flex;
   align-items: center;

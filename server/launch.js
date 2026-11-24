@@ -10,7 +10,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { CLAUDE_BIN, CLAUDE_DIR, WT_EXE, WSL_DISTRO, VSCODE_CLI, EXPLORER_EXE, CMD_EXE, paths, HOME, IS_WSL } from './config.js';
+import { CLAUDE_CMD, CLAUDE_DIR, WT_EXE, WSL_DISTRO, VSCODE_CLI, EXPLORER_EXE, CMD_EXE, paths, HOME, IS_WSL } from './config.js';
 import { run, shq, clip, readJSONSync, log } from './util.js';
 import { bridgeUrl } from './sources/live.js';
 import { findBin } from './sources/harness/common.js';
@@ -18,14 +18,16 @@ import { detectTerminal, openInTerminal } from './terminal.js';
 
 const SUBCOMMANDS = new Set(['agents', 'attach', 'auth', 'auto-mode', 'doctor', 'gateway', 'import', 'install', 'logs', 'mcp', 'plugin', 'plugins', 'purge', 'respawn', 'rm', 'setup-token', 'stop', 'kill', 'ultrareview', 'update', 'upgrade', 'remote-control', 'config']);
 const MODELS = new Set(['', 'opus', 'sonnet', 'haiku', 'fable', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5', 'claude-fable-5-2']);
-const PERMISSION_MODES = new Set(['bypassPermissions', 'acceptEdits', 'auto', 'manual', 'plan', 'dontAsk']);
+/** Modes a launch may ask for. "manual" is Pilotage's older name for Claude Code's ask mode ("default"). */
+export const PERMISSION_MODES = new Set(['bypassPermissions', 'acceptEdits', 'auto', 'manual', 'default', 'plan', 'dontAsk']);
 const UUID_RX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 export const HARNESSES = { claude: 'Claude Code', codex: 'Codex CLI', gemini: 'Gemini CLI' };
 const CODEX_SUBCOMMANDS = new Set(['exec', 'e', 'login', 'logout', 'mcp', 'mcp-server', 'app-server', 'completion', 'sandbox', 'debug', 'apply', 'a', 'resume', 'cloud', 'features', 'help']);
 const SAFE_MODEL = /^[A-Za-z0-9][\w.:/@+-]{0,99}$/;
-const WT_SEMI = 'Folder path contains ";" which Windows Terminal cannot handle safely';
+const WT_SEMI = 'Folder path contains ";" or \'"\' which Windows Terminal cannot handle safely';
 const NO_WT = 'Terminal tabs need WSL2 and Windows Terminal';
-const NO_TERM = 'No terminal window can be opened on this computer';
+// On WSL the missing piece is Windows Terminal (Windows 10 doesn't ship it): say so.
+const NO_TERM = IS_WSL && String(process.env.PILOTAGE_TERMINAL || '').toLowerCase() !== 'none' ? 'Windows Terminal (wt.exe) is not installed (get it from the Microsoft Store)' : 'No terminal window can be opened on this computer';
 /** After the session ends, the window stays open on a shell (bash on WSL, the user's shell elsewhere). */
 const KEEP_OPEN = IS_WSL ? 'exec bash -l' : 'exec "${SHELL:-/bin/bash}" -l';
 
@@ -52,7 +54,9 @@ const OPENER = process.platform === 'darwin' ? 'open' : 'xdg-open';
 
 /** Windows Terminal treats ';' in any argument as a command separator. */
 export function assertWtSafe(p) {
-  if (String(p ?? '').includes(';')) throw new Error(WT_SEMI);
+  // ';' splits wt.exe's command line; '"' breaks out of the quotes Windows Terminal adds around arguments with spaces
+  // (it doesn't escape inner quotes), and wsl.exe then runs whatever follows `--`.
+  if (/[;"]/.test(String(p ?? ''))) throw new Error(WT_SEMI);
 }
 
 /** Every wt.exe call goes through here: ';' refused in paths, replaced in titles. */
@@ -97,10 +101,13 @@ function harnessModel(m) {
   return s && SAFE_MODEL.test(s) && !MODELS.has(s) && !s.startsWith('claude-') ? s : '';
 }
 
-/** Pilotage permission modes → codex / gemini flags (bypassPermissions = their "yolo" equivalents). */
+/**
+ * Pilotage permission modes → codex / gemini flags (bypassPermissions = their "yolo" equivalents).
+ * Fails closed: only the exact value bypassPermissions skips approvals; anything unknown or mistyped asks first.
+ */
 export function harnessPermissionArgs(harness, mode) {
-  const ask = mode === 'manual' || mode === 'plan' || mode === 'dontAsk';
   const edits = mode === 'acceptEdits' || mode === 'auto';
+  const ask = mode !== 'bypassPermissions' && !edits;
   if (harness === 'codex') return ask ? [] : edits ? ['--full-auto'] : ['--dangerously-bypass-approvals-and-sandbox'];
   if (harness === 'gemini') return ['--approval-mode', ask ? 'default' : edits ? 'auto_edit' : 'yolo'];
   return permissionArgs(mode);
@@ -159,8 +166,9 @@ export function listLaunches() {
 
 function permissionArgs(mode) {
   if (mode === 'bypassPermissions') return ['--dangerously-skip-permissions'];
-  if (PERMISSION_MODES.has(mode)) return ['--permission-mode', mode];
-  return ['--dangerously-skip-permissions'];
+  // "default" (ask before acting) is the spelling every Claude Code version accepts; older ones refuse "manual".
+  if (mode === 'manual' || !PERMISSION_MODES.has(mode)) return ['--permission-mode', 'default'];
+  return ['--permission-mode', mode];
 }
 
 /**
@@ -273,11 +281,11 @@ async function launchTerminal(rec, { prompt, permissionMode }) {
     `# Started by Pilotage on ${new Date().toISOString()}`,
     `cd -- ${shq(rec.cwd)} || { echo "Pilotage: folder not found"; exec bash -l; }`,
     `printf '\\033]0;%s\\007' ${shq(rec.name)}`,
-    `CLAUDE=${shq(CLAUDE_BIN)}`,
+    `CLAUDE=(${CLAUDE_CMD.map(shq).join(' ')})`, // [node] claude: an npm install runs with Pilotage's node
     `ARGS=(${args.map(shq).join(' ')})`,
     prompt
-      ? `PROMPT="$(cat ${shq(promptFile)})"; rm -f ${shq(promptFile)}; "$CLAUDE" "\${ARGS[@]}" -- "$PROMPT"`
-      : `"$CLAUDE" "\${ARGS[@]}"`,
+      ? `PROMPT="$(cat ${shq(promptFile)})"; rm -f ${shq(promptFile)}; "\${CLAUDE[@]}" "\${ARGS[@]}" -- "$PROMPT"`
+      : `"\${CLAUDE[@]}" "\${ARGS[@]}"`,
     `rm -f ${shq(script)}`,
     KEEP_OPEN,
     '',
@@ -296,7 +304,7 @@ async function launchBackground(rec, { prompt, permissionMode }) {
   }
   if (prompt) args.push('--', prompt);
   // Run through a login shell so PATH / nvm match the user's normal terminals.
-  const cmd = [CLAUDE_BIN, ...args].map(shq).join(' ');
+  const cmd = [...CLAUDE_CMD, ...args].map(shq).join(' ');
   const r = await run('bash', ['-lc', cmd], { cwd: rec.cwd, timeout: 60000 });
   const out = `${r.stdout}\n${r.stderr}`;
   const m = /backgrounded\s*·\s*([0-9a-f]{6,})/i.exec(out.replace(/\x1b\[[0-9;]*m/g, ''));
@@ -362,13 +370,13 @@ export async function attachTerminal(bgId, name) {
   const script = scriptFile(`attach-${bgId}`);
   assertTermSafe(script);
   const title = sanitizeName(name, bgId);
-  fs.writeFileSync(script, ['#!/usr/bin/env bash', `cd -- ${shq(HOME)}`, `printf '\\033]0;%s\\007' ${shq(title)}`, `${shq(CLAUDE_BIN)} attach ${shq(bgId)}`, `rm -f ${shq(script)}`, KEEP_OPEN, ''].join('\n'), { mode: 0o700 });
+  fs.writeFileSync(script, ['#!/usr/bin/env bash', `cd -- ${shq(HOME)}`, `printf '\\033]0;%s\\007' ${shq(title)}`, `${[...CLAUDE_CMD, 'attach', bgId].map(shq).join(' ')}`, `rm -f ${shq(script)}`, KEEP_OPEN, ''].join('\n'), { mode: 0o700 });
   await openScript(script, { title, cwd: HOME });
 }
 
 export async function stopBackground(bgId) {
   if (!/^[0-9a-f]{6,}$/.test(bgId || '')) throw new Error('bad id');
-  const r = await run(CLAUDE_BIN, ['stop', bgId], { timeout: 20000 });
+  const r = await run(CLAUDE_CMD[0], [...CLAUDE_CMD.slice(1), 'stop', bgId], { timeout: 20000 });
   if (r.code !== 0) throw new Error(clip(r.stderr || r.stdout, 200));
 }
 

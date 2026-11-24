@@ -7,6 +7,68 @@ minor versions.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-24
+
+A security and first-run release: an overnight audit of the whole codebase, with every fix tested and reviewed.
+
+### Security
+
+- A repository found on disk (an unpacked archive, a clone) can no longer make Pilotage's background `git` calls run
+  a program: no repo-local filters, git-lfs extensions or transfer agents, signature checks, lazy fetches or network
+  transports. Such repos simply show no git status.
+- Secrets are masked in everything sent to the AI provider (CLAUDE.md files, Claude memory, READMEs, notes), not only
+  in transcripts, and more formats are recognised (Groq, Hugging Face, xAI, Replicate, Google OAuth, Stripe
+  webhooks, Slack/Discord webhooks, Basic auth, `curl -u`, quoted values). Redaction is linear: a huge paste no
+  longer blocks the server.
+- AI provider settings (where an API key is sent) and coding-tool sources can only be changed from the PC.
+- Junk login or pairing codes can't lock out a valid one.
+- An unknown or mistyped permission mode asks first instead of skipping permission prompts; `/api/launch` refuses it.
+- WSL: a folder path containing `"` is refused before Windows Terminal (it could inject a command).
+- Encoded `..%2f` paths no longer reach the app shell without a paired device; non-object JSON bodies get a 400.
+- SECURITY.md now says plainly that a paired device can start sessions on the PC, and what to do after losing one.
+
+### Added
+
+- `pilotage doctor`: checks Node, Claude Code (found, recent enough), ports, the data folder, PATH, Windows Terminal,
+  Node.js on Windows, autostart and the launch mode, and says how to fix what's missing.
+- Linux: `pilotage install` starts Pilotage at login with a systemd user service (#2).
+- `pilotage phone --trust-wifi`.
+- Phone access over IPv6 in direct-bind mode (Linux/macOS, `PILOTAGE_LAN_BIND=::`): IPv6 CIDRs in
+  `PILOTAGE_LAN_ALLOW`, IPv6 subnets in `lan` and Tailscale's IPv6 range in `vpn`; IPv4-mapped peers are always
+  checked as IPv4 (#7).
+- Home welcomes a new user who has no sessions yet (New session, the Guide) instead of a page of zeros.
+
+### Changed
+
+- New installs start sessions in Claude Code's ask mode ("Ask every time"). "Skip all prompts" is one click away in
+  Settings → New sessions; installs from before 0.4.0 keep their mode. When it skips prompts, New session and task
+  Start say so, and "Trust this folder" is never pre-ticked, on the phone either.
+- "Enable phone access" no longer trusts the current Wi-Fi by itself: trust your home network with the Trust button
+  (or `--trust-wifi`).
+- Automatic summaries cover the last 30 days (`ai.backfillDays`); older work and repos without sessions are
+  summarized on "Summarize now" only.
+- Pilotage's own `claude -p` calls run on your Claude login, not an `ANTHROPIC_API_KEY` left in the shell
+  (`PILOTAGE_USE_ANTHROPIC_API_KEY=1` to use the key).
+- Home and Settings name a broken AI provider (logged out, missing CLI, bad key) instead of blaming usage.
+- AI "Pause" survives a restart. `PILOTAGE_NO_AI=1` stops every AI call, Settings' Test included.
+- The README is rewritten around a 5-minute quick start and a troubleshooting table.
+
+### Fixed
+
+- A `state.json` that doesn't parse is kept aside and the newest backup is loaded, instead of everything silently
+  resetting to defaults (settings, notes, ideas, renames).
+- `pilotage open` always shows the one-time sign-in link, also when no browser could be opened (WSL).
+- WSL without Windows Terminal (Windows 10): Claude sessions start in the background instead of failing.
+- Claude Code installed with npm under nvm is found by launch tabs and by the autostarted server, and runs with
+  Pilotage's Node.js whatever node comes first on PATH.
+- Phone access works on Windows in any display language (addresses, Wi-Fi name, firewall scope).
+- `pilotage stop` / `restart` / `uninstall` only ever stop Pilotage's own server, however it was started.
+- The phone forwarder comes back by itself after Windows sleep, and backs off when it can't.
+- The launch screens stop spinning when no phone link appears, and link to the session as soon as it exists.
+- The usage guard keeps a 5-hour reading until its window resets; the session index's memory stays bounded; day
+  detail is right on DST days; project names in any script (Arabic, Cyrillic, CJK) make a folder name.
+- The public export leaves out the audit notes.
+
 ## [0.3.0] - 2026-11-19
 
 Install in one command, and macOS and Linux start sessions in a terminal like WSL does.
@@ -91,7 +153,8 @@ First public release.
 - Security: a 127.0.0.1-only server, paired devices, one-time codes, a CSRF header, a Host allow-list and redaction
   of common secret formats.
 
-[Unreleased]: https://github.com/Ya-zid/pilotage/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/Ya-zid/pilotage/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/Ya-zid/pilotage/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Ya-zid/pilotage/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Ya-zid/pilotage/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Ya-zid/pilotage/releases/tag/v0.1.0

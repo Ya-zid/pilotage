@@ -7,8 +7,16 @@ import { useProviders } from '../../api-extra';
 import type { Settings as SettingsT } from '../../types';
 import type { Preset, PresetId, ProviderId, ProviderInfo, ProvidersPatch, ProvidersResponse, ProviderTest } from '../../types-extra';
 import { Button, Callout, Disclosure, ErrorBox, LoadingCard, Meter, SegmentedControl, Skeleton, Spinner, StatTile, StatusIcon, Switch, USAGE_LABELS, useToast } from '../ui';
-import { ago, fmtDateTime, fmtTime, plural } from '../../util';
-import { NumberInput, PatchFn, SettingRow, SettingRows, SettingsCard, cap, errMsg, fmtCost, friendlyAiError, jobLabel, jobPhrase, untilText, useNow } from './common';
+import { aiHold, ago, fmtDateTime, fmtTime, plural, type AiHold } from '../../util';
+import { NumberInput, PatchFn, PcOnly, SettingRow, SettingRows, SettingsCard, cap, errMsg, fmtCost, friendlyAiError, jobLabel, jobPhrase, untilText, useNow, useViaLan } from './common';
+
+/** The status title while the guard holds AI work back, by what holds it (util.ts aiHold). */
+const HOLD_TITLE: Record<AiHold, string> = {
+  provider: 'AI provider problem',
+  error: 'Paused after an error',
+  cap: 'Paused at your AI call limit',
+  usage: 'Waiting for room in your usage',
+};
 
 const CLAUDE_MODELS = [
   { value: 'haiku', label: 'Haiku' },
@@ -52,7 +60,7 @@ export function useAiSummary(s: SettingsT | undefined) {
   const { data: pv } = useProviders();
   if (!s) return '';
   const name = pv ? PROVIDER_NAME[pv.provider] : '';
-  const state = !s.ai.enabled ? 'Off' : !ai ? '' : ai.pausedByUser ? 'Paused' : !ai.guard.ok ? 'Waiting' : ai.running.length ? 'Working' : 'Up to date';
+  const state = !s.ai.enabled ? 'Off' : !ai ? '' : ai.pausedByUser ? 'Paused' : !ai.guard.ok ? (aiHold(ai.guard.reason) === 'provider' ? 'Provider problem' : 'Waiting') : ai.running.length ? 'Working' : 'Up to date';
   return [name, state].filter(Boolean).join(' · ');
 }
 
@@ -94,12 +102,20 @@ function ActivityCard({ s }: { s: SettingsT }) {
   else if (!ai) status = { glyph: 'queued', title: 'Checking…' };
   else if (ai.pausedByUser) status = { glyph: 'paused', title: 'Paused by you', sub: 'Nothing runs in the background until you resume.' };
   else if (ai.running.length) status = { glyph: 'working', title: `Working on ${plural(ai.running.length, 'job')}`, sub: ai.queueLength ? `${ai.queueLength} more waiting` : undefined };
-  else if (!ai.guard.ok)
+  else if (!ai.guard.ok) {
+    const hold = aiHold(ai.guard.reason);
+    // A provider problem keeps its detail ("Claude is logged out…"); the title already says what kind it is.
+    const why = (ai.guard.reason || 'Usage limit reached').replace(/^AI provider problem:\s*/, '').replace(/[.\s]+$/, '');
+    const again = ai.guard.until && ai.guard.until > now ? untilText(ai.guard.until, now) : '';
     status = {
       glyph: 'blocked',
-      title: 'Waiting for room in your usage',
-      sub: `${ai.guard.reason || 'Usage limit reached'}${ai.guard.until && ai.guard.until > now ? `. Picks up again ${untilText(ai.guard.until, now)}.` : '.'}`,
+      title: HOLD_TITLE[hold],
+      sub:
+        hold === 'provider'
+          ? `${why}. Pilotage tries again ${again || 'later'}, or as soon as you change the provider below.`
+          : `${why}.${again ? ` Picks up again ${again}.` : ''}`,
     };
+  }
   else if (ai.queueLength || ai.pendingBlocks) status = { glyph: 'in_progress', title: `${ai.queueLength || ai.pendingBlocks} waiting`, sub: 'Summaries are written a few at a time.' };
   else status = { glyph: 'done', title: 'Up to date', sub: ai.stats.lastRunAt ? `Last run ${ago(ai.stats.lastRunAt)}` : undefined };
 
@@ -206,6 +222,7 @@ function ProviderCard({ s, patch }: { s: SettingsT; patch: PatchFn }) {
   const { data: pv, error, isLoading } = useProviders();
   const patchP = usePatchProviders();
   const [saving, setSaving] = useState<ProviderId | null>(null);
+  const viaLan = useViaLan();
   const choose = async (id: ProviderId) => {
     if (!pv || id === pv.provider) return;
     setSaving(id);
@@ -213,23 +230,37 @@ function ProviderCard({ s, patch }: { s: SettingsT; patch: PatchFn }) {
     setSaving(null);
   };
   return (
-    <SettingsCard title="Provider" icon={<Sparkles />} description="Who writes the summaries. Switching doesn't redo existing ones; new work uses the new provider.">
+    <SettingsCard title="Provider" icon={<Sparkles />} description="Who writes the summaries. Switching doesn't redo existing ones; new work uses the new provider." actions={viaLan ? <PcOnly text="Change on the PC" /> : null}>
       {error ? (
         <ErrorBox error={error} />
       ) : isLoading || !pv ? (
         <LoadingCard lines={2} />
       ) : (
         <div className="stack-lg">
-          <div className="provider-grid" role="radiogroup" aria-label="AI provider">
-            {pv.providers.map((p) => (
-              <ProviderChoice key={p.id} p={p} on={pv.provider === p.id} cap={pv.dailyCallCap} busy={saving === p.id} onPick={() => choose(p.id)} />
-            ))}
-          </div>
+          {/* Provider, its address and key, the account folder and Test are PC-only (server LOCAL_ONLY); the model
+              choices are plain settings and stay usable on the phone. */}
+          <fieldset className="bare-fieldset" disabled={viaLan}>
+            <div className="provider-grid" role="radiogroup" aria-label="AI provider">
+              {pv.providers.map((p) => (
+                <ProviderChoice key={p.id} p={p} on={pv.provider === p.id} cap={pv.dailyCallCap} busy={saving === p.id} onPick={() => choose(p.id)} />
+              ))}
+            </div>
+          </fieldset>
           <div className="provider-config">
-            {pv.provider === 'claude-cli' && <ClaudeConfig s={s} patch={patch} pv={pv} />}
-            {pv.provider === 'codex-cli' && <CodexConfig pv={pv} />}
-            {pv.provider === 'openai-compatible' && <ApiConfig pv={pv} />}
-            <TestRow provider={pv.provider} />
+            {pv.provider === 'claude-cli' && <ClaudeConfig s={s} patch={patch} pv={pv} pcOnly={viaLan} />}
+            {pv.provider === 'codex-cli' && (
+              <fieldset className="bare-fieldset" disabled={viaLan}>
+                <CodexConfig pv={pv} />
+              </fieldset>
+            )}
+            {pv.provider === 'openai-compatible' && (
+              <fieldset className="bare-fieldset" disabled={viaLan}>
+                <ApiConfig pv={pv} />
+              </fieldset>
+            )}
+            <fieldset className="bare-fieldset" disabled={viaLan}>
+              <TestRow provider={pv.provider} />
+            </fieldset>
           </div>
         </div>
       )}
@@ -258,7 +289,7 @@ function ModelSeg({ value, label, onChange }: { value: string; label: string; on
   return <SegmentedControl size="sm" label={label} value={value} options={opts} onChange={onChange} />;
 }
 
-function ClaudeConfig({ s, patch, pv }: { s: SettingsT; patch: PatchFn; pv: ProvidersResponse }) {
+function ClaudeConfig({ s, patch, pv, pcOnly }: { s: SettingsT; patch: PatchFn; pv: ProvidersResponse; pcOnly: boolean }) {
   const patchP = usePatchProviders();
   const a = s.ai;
   const setAi = (p: Partial<SettingsT['ai']>, msg: string) => patch({ settings: { ai: p } }, msg);
@@ -275,7 +306,7 @@ function ClaudeConfig({ s, patch, pv }: { s: SettingsT; patch: PatchFn; pv: Prov
       </SettingRow>
       <div className="srow-extra">
         <Disclosure summary="Use another Claude account">
-          <div className="stack">
+          <fieldset className="stack bare-fieldset" disabled={pcOnly}>
             <TextSetting
               id="claude-config-dir"
               label="Claude account folder"
@@ -285,7 +316,7 @@ function ClaudeConfig({ s, patch, pv }: { s: SettingsT; patch: PatchFn; pv: Prov
               mono
               onCommit={(v) => patchP({ providers: { 'claude-cli': { configDir: v } } }, v ? 'Claude account folder saved' : 'Using your default Claude account')}
             />
-          </div>
+          </fieldset>
         </Disclosure>
       </div>
     </SettingRows>
@@ -612,6 +643,7 @@ function AutomationCard({ s, patch }: { s: SettingsT; patch: PatchFn }) {
   const { data: ai } = useAI();
   const { data: pv } = useProviders();
   const patchP = usePatchProviders();
+  const viaLan = useViaLan();
   const now = useNow(60_000);
   const a = s.ai;
   const setAi = (p: Partial<SettingsT['ai']>, msg: string) => patch({ settings: { ai: p } }, msg);
@@ -662,7 +694,8 @@ function AutomationCard({ s, patch }: { s: SettingsT; patch: PatchFn }) {
           </>
         ) : (
           pv && (
-            <SettingRow label="Daily call limit" htmlFor="ai-cap" hint="For Codex and API providers. Background work stops when it's reached and resets at midnight. 0 means no limit.">
+            <SettingRow label="Daily call limit" htmlFor="ai-cap" hint={`For Codex and API providers. Background work stops when it's reached and resets at midnight. 0 means no limit.${viaLan ? ' Change it on the PC.' : ''}`}>
+              <fieldset className="bare-fieldset" disabled={viaLan}>
               <NumberInput
                 id="ai-cap"
                 value={pv.dailyCallCap}
@@ -673,6 +706,7 @@ function AutomationCard({ s, patch }: { s: SettingsT; patch: PatchFn }) {
                 label="Daily call limit"
                 onCommit={(v) => patchP({ dailyCallCap: v }, v ? `Limit: ${v} calls a day` : 'No daily limit')}
               />
+              </fieldset>
             </SettingRow>
           )
         )}

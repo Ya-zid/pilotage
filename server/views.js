@@ -12,6 +12,15 @@ const DAY = 86400e3;
 /** Auto titles that say nothing about the work. */
 const GENERIC_TITLE = /^(?:greetings?|hello|hi|hey|hi there|hello there|untitled(?: session)?|new (?:chat|session|conversation)|quick question|test(?:ing)?|session start|(?:casual|initial|simple|friendly) greeting|general (?:chat|question)|introduction|small talk)\b[\s.!?]*$/i;
 
+
+/** [start, end) of a local calendar day: 23 or 25 hours on DST days, so day detail matches the heatmap (tested). */
+export function dayRange(day) {
+  const s = new Date(`${day}T00:00:00`);
+  const e = new Date(s);
+  e.setDate(e.getDate() + 1);
+  return [s.getTime(), e.getTime()];
+}
+
 export class Views {
   constructor({ index, registry, store, live, ai, processes }) {
     this.index = index;
@@ -504,8 +513,7 @@ export class Views {
   }
 
   dayDetail(day) {
-    const start = new Date(`${day}T00:00:00`).getTime();
-    const end = start + DAY;
+    const [start, end] = dayRange(day);
     const blocks = [];
     for (const meta of this.index.list()) {
       if (meta.lastAt < start || meta.startedAt > end) continue;

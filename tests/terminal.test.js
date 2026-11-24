@@ -67,8 +67,16 @@ test('Linux: a terminal only in a graphical session, the first one found, or the
   assert.equal(T.detectTerminal({ platform: 'linux', env: { ...env, PILOTAGE_TERMINAL: 'kitty' }, wsl: false }), null, 'kitty is not installed');
   assert.equal(T.detectTerminal({ platform: 'linux', env: { ...env, PILOTAGE_TERMINAL: 'none' }, wsl: false }), null);
   assert.equal(T.detectTerminal({ platform: 'linux', env: { ...env, PILOTAGE_TERMINAL: 'none' }, wsl: true }), null);
-  assert.equal(T.detectTerminal({ platform: 'linux', env, wsl: true }).kind, 'wt');
+  const wt = path.join(BASE, 'wt.exe');
+  fs.writeFileSync(wt, '');
+  assert.equal(T.detectTerminal({ platform: 'linux', env, wsl: true, wtExe: wt }).kind, 'wt');
   assert.equal(T.detectTerminal({ platform: 'win32', env, wsl: false }), null);
+});
+
+test('WSL: Windows Terminal only when wt.exe is there (Windows 10 has none: Claude sessions start in the background)', () => {
+  const env = { PATH: BIN };
+  assert.equal(T.detectTerminal({ platform: 'linux', env, wsl: true, wtExe: path.join(BASE, 'no-such-dir', 'wt.exe') }), null);
+  assert.equal(T.detectTerminal({ platform: 'linux', env, wsl: true, wtExe: null }), null, 'no Windows profile found');
 });
 
 test('openInTerminal: a failing opener is an error, one still running after a moment means the window is up', async () => {

@@ -1,6 +1,7 @@
 // Headless `claude -p` calls with structured output. No tools, no MCP, no user hooks,
 // no session persistence: a pure text-in / JSON-out call on the user's subscription.
-import { CLAUDE_BIN, paths } from '../config.js';
+import fs from 'node:fs';
+import { CLAUDE_CMD, paths } from '../config.js';
 import { runWithInput, clip, log } from '../util.js';
 
 const BASE_ARGS = [
@@ -14,6 +15,23 @@ const BASE_ARGS = [
 ];
 
 /**
+ * The environment for Pilotage's own `claude -p` calls (pure; tested). No PILOTAGE_* variables, and no API key
+ * picked up from the shell that started Pilotage: with ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN) set, Claude Code
+ * bills the API account instead of the subscription the summaries are meant to use, and the usage guard (which reads
+ * the subscription's numbers) never notices. PILOTAGE_USE_ANTHROPIC_API_KEY=1 keeps them, for API-key-only setups.
+ */
+export function claudeEnv(parent) {
+  const env = { ...parent };
+  const keepKey = parent.PILOTAGE_USE_ANTHROPIC_API_KEY === '1';
+  for (const k of Object.keys(env)) if (k.startsWith('PILOTAGE_')) delete env[k];
+  if (!keepKey) {
+    delete env.ANTHROPIC_API_KEY;
+    delete env.ANTHROPIC_AUTH_TOKEN;
+  }
+  return env;
+}
+
+/**
  * configDir (optional): run the child with CLAUDE_CONFIG_DIR=<dir>, i.e. as the Claude account/config
  * stored there instead of ~/.claude. Usually called through ai/providers.js → callAI().
  */
@@ -21,11 +39,12 @@ export async function callClaude({ instruction, input, schema, model = 'haiku', 
   const args = [...BASE_ARGS, '--model', model, '--effort', effort];
   if (schema) args.push('--json-schema', JSON.stringify(schema));
   args.push('--', instruction);
-  const env = { ...process.env };
-  for (const k of Object.keys(env)) if (k.startsWith('PILOTAGE_')) delete env[k];
+  const env = claudeEnv(process.env);
   if (configDir) env.CLAUDE_CONFIG_DIR = configDir;
+  // A missing working folder makes the spawn fail with ENOENT, which reads as "Claude is not installed".
+  fs.mkdirSync(paths.aiSandbox, { recursive: true });
   const t0 = Date.now();
-  const r = await runWithInput(CLAUDE_BIN, args, input, { cwd: paths.aiSandbox, env, timeout });
+  const r = await runWithInput(CLAUDE_CMD[0], [...CLAUDE_CMD.slice(1), ...args], input, { cwd: paths.aiSandbox, env, timeout });
   const ms = Date.now() - t0;
   let j = null;
   try {

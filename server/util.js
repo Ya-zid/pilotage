@@ -16,6 +16,67 @@ export function readJSONSync(file, fallback) {
   }
 }
 
+const isJSONObject = (x) => !!x && typeof x === 'object' && !Array.isArray(x);
+
+/**
+ * Read a file that holds the user's own data (state.json, work.json); null when there is none yet. Never starts empty
+ * over a damaged file (the next save would win): one that won't parse or isn't an object is kept aside as
+ * <file>.corrupt-<ms>, and the newest <backupsDir>/<prefix>-*.json that parses is loaded and written back.
+ * With no readable backup it returns null (the caller starts from defaults) and the damaged copy stays.
+ */
+export function loadJSONObjectSync(file, backupsDir, prefix) {
+  let why;
+  try {
+    const d = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (isJSONObject(d)) return d;
+    why = 'not a JSON object';
+  } catch (e) {
+    if (e.code === 'ENOENT') return null;
+    why = e.message;
+  }
+  let aside = `${file}.corrupt-${Date.now()}`;
+  for (let n = 2; fs.existsSync(aside); n++) aside = `${file}.corrupt-${Date.now()}-${n}`; // never overwrite an earlier copy
+  let kept = false;
+  for (const keep of [fs.renameSync, fs.copyFileSync]) {
+    try {
+      keep(file, aside);
+      kept = true;
+      break;
+    } catch {}
+  }
+  log.error(`${prefix}: ${path.basename(file)} is unreadable (${clip(why, 120)}); ${kept ? `kept it as ${path.basename(aside)}` : 'could not keep a copy'}`);
+  let backups = [];
+  try {
+    backups = fs.readdirSync(backupsDir).filter((f) => f.startsWith(`${prefix}-`) && f.endsWith('.json')).sort().reverse();
+  } catch {}
+  for (const f of backups) {
+    const d = readJSONSync(path.join(backupsDir, f), null);
+    if (!isJSONObject(d)) continue;
+    log.warn(`${prefix}: restored ${path.basename(file)} from backups/${f}`);
+    try {
+      if (kept) writeJSONSync(file, d); // so a restart before the next save doesn't find no file and start empty
+    } catch {}
+    return d;
+  }
+  log.error(`${prefix}: no readable backup of ${path.basename(file)}; starting from defaults`);
+  return null;
+}
+
+/**
+ * Before the day's first save, copy <file> to <backupsDir>/<prefix>-<day>.json and keep the newest `keep` copies.
+ * A file that doesn't parse is never copied: the backups are what loadJSONObjectSync falls back to.
+ */
+export function backupDailySync(file, backupsDir, prefix, keep) {
+  const daily = path.join(backupsDir, `${prefix}-${isoDay(Date.now())}.json`);
+  if (fs.existsSync(daily) || !isJSONObject(readJSONSync(file, null))) return;
+  fs.mkdirSync(backupsDir, { recursive: true });
+  fs.copyFileSync(file, daily);
+  try {
+    const files = fs.readdirSync(backupsDir).filter((f) => f.startsWith(`${prefix}-`) && f.endsWith('.json')).sort();
+    for (const f of files.slice(0, Math.max(0, files.length - keep))) fs.unlinkSync(path.join(backupsDir, f));
+  } catch {}
+}
+
 export async function readJSON(file, fallback) {
   try {
     return JSON.parse(await fsp.readFile(file, 'utf8'));
@@ -276,23 +337,41 @@ const SECRET_PATTERNS = [
   /((?:AKIA|ASIA)[0-9A-Z]{2})[0-9A-Z]{14}/g,
   /(AIza[0-9A-Za-z_-]{2})[0-9A-Za-z_-]{33}/g,
   /(xox[abposr]-)[A-Za-z0-9-]{10,}/g,
-  /(eyJ[A-Za-z0-9_-]{4})[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g,
+  /(?<![A-Za-z0-9_-])(eyJ[A-Za-z0-9_-]{4})[A-Za-z0-9_-]{6,4000}\.[A-Za-z0-9_-]{10,4000}\.[A-Za-z0-9_-]{10,4000}/g, // JWT
   /\b(re_[A-Za-z0-9]{3})[A-Za-z0-9_]{20,}/g,
   /(SG\.[A-Za-z0-9_-]{3})[A-Za-z0-9_.-]{30,}/g,
   /\b(\d{8,10}:AA)[A-Za-z0-9_-]{30,}/g, // Telegram bot token
   /\b(Bearer\s+[A-Za-z0-9]{2})[A-Za-z0-9._~+\/=-]{14,}/g,
-  /([a-z][a-z0-9+.-]*:\/\/[^:\s/@]+:)[^@\s/]+(?=@)/gi, // scheme://user:password@host
+  // Basic auth in headers, JSON or code; the credential must look like base64 (a digit or + / =), not a word.
+  /\b(Authorization["']?\s*[:=]\s*["']?Basic\s+[A-Za-z0-9+\/]{2})(?=[A-Za-z0-9+\/=]*[0-9+\/=])[A-Za-z0-9+\/=]{10,}/gi,
+  /(\bcurl\b[^\n]{0,300}?\s(?:-u|--user)\s*["']?[^\s:"']{1,100}:)[^\s"']{4,}/g, // curl -u user:password
+  /\b(gsk_[A-Za-z0-9]{2})[A-Za-z0-9]{30,}/g, // Groq
+  /\b(hf_[A-Za-z0-9]{2})[A-Za-z0-9]{28,}/g, // Hugging Face
+  /\b(xai-[A-Za-z0-9]{2})[A-Za-z0-9]{30,}/g, // xAI
+  /\b(r8_[A-Za-z0-9]{2})[A-Za-z0-9]{28,}/g, // Replicate
+  /\b(GOCSPX-[A-Za-z0-9]{2})[A-Za-z0-9_-]{18,}/g, // Google OAuth client secret
+  /\b(whsec_[A-Za-z0-9]{2})[A-Za-z0-9+\/=]{18,}/g, // Stripe webhook signing secret
+  /(hooks\.slack\.com\/services\/)[A-Za-z0-9\/]{20,}/g,
+  /(discord(?:app)?\.com\/api\/webhooks\/)\d+\/[A-Za-z0-9_-]{20,}/g,
+  /(?<![a-z0-9+.-])([a-z][a-z0-9+.-]{0,30}:\/\/[^:\s/@]{1,200}:)[^@\s/]{1,200}(?=@)/gi, // scheme://user:password@host
 ];
-// KEY=value / "key": "value" where the key name looks secret (DB_PASSWORD, STRIPE_SECRET_KEY, api_key, mot de passe…)
+// A quoted value never starts with a space, nor is `+ x +` (that's the gap between two string literals in code).
+// Every repeat is bounded so redact() stays linear on any input. Key names are bounded ({0,40} around the word): unbounded, a long identifier run made this cubic (a 20 KB blob
+// froze the server for over a minute). KEY=value / "key": "value" (quoted values may contain spaces; bare ones stop at whitespace, quotes and commas) where the key name looks secret (DB_PASSWORD, STRIPE_SECRET_KEY, api_key, mot de passe…)
 const KV_SECRET =
-  /\b([A-Za-z0-9_.-]*(?:password|passwd|pwd|secret|api[_-]?key|access[_-]?key|private[_-]?key|access[_-]?token|auth[_-]?token|refresh[_-]?token|client[_-]?secret|token|mot de passe|mdp)[A-Za-z0-9_.-]*["']?\s*[:=]\s*)(["']?)([^\s"',;]{4,})\2/gi;
+  /\b([A-Za-z0-9_.-]{0,40}(?:password|passwd|pwd|secret|api[_-]?key|access[_-]?key|private[_-]?key|access[_-]?token|auth[_-]?token|refresh[_-]?token|client[_-]?secret|token|mot de passe|mdp)[A-Za-z0-9_.-]{0,40}["']?\s*[:=]\s*)(?:"(?!\s|\+[^"\n]*\+")([^"\n]{4,200})"|'(?!\s|\+[^'\n]*\+')([^'\n]{4,200})'|([^\s"',]{4,}))/gi;
 const PEM = /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g;
 
 export function redact(text) {
   if (!text || typeof text !== 'string') return text;
   let s = text.replace(PEM, '[private key hidden]');
   for (const rx of SECRET_PATTERNS) s = s.replace(rx, (_m, keep) => `${keep}…[hidden]`);
-  s = s.replace(KV_SECRET, (m, k, q, v) => (/^(true|false|null|none|undefined|required|optional|\*+|\[hidden\].*|….*)$/i.test(v) ? m : `${k}${q}[hidden]${q}`));
+  s = s.replace(KV_SECRET, (m, k, dq, sq, bare) => {
+    const v = dq ?? sq ?? bare;
+    if (/^(true|false|null|none|undefined|required|optional|\*+|\[hidden\].*|….*)$/i.test(v)) return m;
+    const q = dq != null ? '"' : sq != null ? "'" : '';
+    return `${k}${q}[hidden]${q}`;
+  });
   return s;
 }
 

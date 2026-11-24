@@ -81,7 +81,9 @@ Query keys (`KIND_TO_KEYS`) and invalidates them, so pages refetch by themselves
   read from the transcript at the stored offset when a page asks for it.
 - **Registry** (`sources/projects.js`): walks your home folder (3 levels by default) and extra folders from
   Settings for git repos, `CLAUDE.md` folders and code folders, and builds workspace → project → worktrees and
-  sessions. Git runs through `sources/git.js` with `--no-optional-locks`, hooks and fsmonitor off.
+  sessions. Git runs through `sources/git.js` with `--no-optional-locks`, hooks, fsmonitor and signature checks off,
+  never uses the network (`GIT_ALLOW_PROTOCOL=''`), and skips `git status` in repos whose own config names a program
+  (filters, git-lfs extensions or transfer agents): a downloaded repo is untrusted.
 - **Live** (`sources/live.js`): running Claude sessions from `claude agents --json` and Claude's state files.
   `sources/processes.js` finds dev servers and maps them to projects.
 - **State**: `server/store.js` keeps settings, renames, ideas and decisions in `data/state.json` (atomic writes,

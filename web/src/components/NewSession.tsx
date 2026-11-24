@@ -1,17 +1,27 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { CheckCircle2, Cloud, ExternalLink, GitFork, Monitor, Search, ShieldCheck, Smartphone, TriangleAlert } from 'lucide-react';
+import { Cloud, GitFork, Monitor, Search, ShieldCheck, TriangleAlert } from 'lucide-react';
 import { useHarnesses } from '../api-extra';
 import { api, terminalPlace, useBootstrap, useInvalidate, useProjects, useSession, useTerminal } from '../api';
 import { useApp } from './AppContext';
-import { Disclosure, Modal, Spinner, useToast, CopyButton, ProjectGlyph, SegmentedControl, Field } from './ui';
+import { LaunchStatus } from './project/LaunchStatus';
+import { Disclosure, Modal, Spinner, useToast, ProjectGlyph, SegmentedControl, Field } from './ui';
 import './NewSession.css';
 import type { Launch } from '../types';
 import { ago, isPhone } from '../util';
 
 const AGENT_LABEL: Record<string, string> = { claude: 'Claude Code', codex: 'Codex', gemini: 'Gemini' };
-const PERM_LABEL: Record<string, string> = { bypassPermissions: 'Skip all prompts', default: 'Ask before acting', acceptEdits: 'Auto-accept edits', plan: 'Plan first' };
+const PERM_LABEL: Record<string, string> = { bypassPermissions: 'Skip all prompts', default: 'Ask every time', manual: 'Ask every time', acceptEdits: 'Accept edits', auto: 'Auto', plan: 'Plan first', dontAsk: 'Pre-approved only' };
+
+/** Said out loud, not folded away: in this mode the agent runs commands and edits files without asking. */
+export function SkipPromptsNote() {
+  return (
+    <div className="row small" role="note" style={{ alignItems: 'flex-start', gap: 6 }}>
+      <TriangleAlert size={14} className="tone-amber" style={{ flex: 'none', marginTop: 2 }} />
+      <span className="faint">Runs commands and edits files without asking first. Only for code you trust (Settings → New sessions → Permissions).</span>
+    </div>
+  );
+}
 
 const MODELS = [
   { value: '', label: 'Default' },
@@ -20,75 +30,6 @@ const MODELS = [
   { value: 'haiku', label: 'Haiku' },
   { value: 'fable', label: 'Fable' },
 ];
-
-function LaunchProgress({ launch, onClose }: { launch: Launch; onClose: () => void }) {
-  const navigate = useNavigate();
-  const { data } = useQuery({
-    queryKey: ['launch', launch.id],
-    queryFn: () => api<Launch>(`/api/launch/${launch.id}`),
-    initialData: launch,
-    refetchInterval: (q) => {
-      const d = q.state.data as Launch | undefined;
-      if (!d) return 1500;
-      if (d.bridgeUrl || d.state === 'error' || Date.now() - d.createdAt > 4 * 60_000) return false;
-      return 1500;
-    },
-  });
-  const l = data || launch;
-  const ready = !!l.bridgeUrl;
-  return (
-    <div className="modal-body" style={{ paddingTop: 10 }}>
-      {l.state === 'error' ? (
-        <div className="callout warn">
-          <TriangleAlert size={18} />
-          <div>
-            <div className="bold">Could not start the session</div>
-            <div className="small">{l.error}</div>
-          </div>
-        </div>
-      ) : (
-        <div className="launch-state">
-          <div className={`launch-icon${ready ? ' ok' : ''}`}>{ready ? <CheckCircle2 size={26} /> : <Spinner size={24} />}</div>
-          <div className="stack" style={{ gap: 6 }}>
-            <div className="launch-title">
-              {ready ? `“${l.name}” is running` : l.mode === 'terminal' ? `Opening ${terminalPlace(l.terminal ?? null)} on your PC…` : 'Starting in the background…'}
-            </div>
-            <div className="small muted readable" style={{ margin: '0 auto' }}>
-              {ready
-                ? l.mode === 'terminal'
-                  ? `It is open in ${l.terminal || 'a terminal'}, and you can continue it from your phone.`
-                  : 'It runs on your PC without a window. Continue it in the Claude app.'
-                : l.note || l.detail || 'Waiting for Claude to connect Remote Control…'}
-            </div>
-          </div>
-          {ready && (
-            <div className="stack" style={{ width: '100%', maxWidth: 360, gap: 10 }}>
-              <a className="btn primary block lg" href={l.bridgeUrl!} target="_blank" rel="noreferrer">
-                <Smartphone size={16} />
-                Open in Claude app
-                <ExternalLink size={14} />
-              </a>
-              <div className="cluster" style={{ justifyContent: 'center' }}>
-                <CopyButton text={l.bridgeUrl!} label="Copy link" />
-                {l.sessionId && (
-                  <button
-                    className="btn sm"
-                    onClick={() => {
-                      onClose();
-                      navigate(`/sessions/${l.sessionId}`);
-                    }}
-                  >
-                    View in Pilotage
-                  </button>
-                )}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
 
 export function NewSessionModal() {
   const { newSession: pre, closeNewSession } = useApp();
@@ -130,7 +71,8 @@ export function NewSessionModal() {
     staleTime: 10_000,
   });
   const askTrust = !!trust && !trust.trusted && !trust.home && !trust.auto;
-  const [trustTick, setTrustTick] = useState(phone);
+  // Never pre-ticked, on the phone either: trusting a folder of code you didn't write must be a choice.
+  const [trustTick, setTrustTick] = useState(false);
 
   const resuming = !!pre?.resumeId;
   const project = projects?.find((p) => p.id === (projectId || resumeSession?.projectId));
@@ -194,7 +136,9 @@ export function NewSessionModal() {
       }
     >
       {launch ? (
-        <LaunchProgress launch={launch} onClose={closeNewSession} />
+        <div className="modal-body" style={{ paddingTop: 10 }}>
+          <LaunchStatus launch={launch} onNavigate={closeNewSession} />
+        </div>
       ) : (
         <div className="modal-body ns-body">
           {resuming ? (
@@ -268,6 +212,7 @@ export function NewSessionModal() {
               </span>
             </label>
           )}
+          {perm === 'bypassPermissions' && <SkipPromptsNote />}
           <Disclosure
             className="ns-options"
             summary={
@@ -316,7 +261,7 @@ export function NewSessionModal() {
               ) : (
                 <div className="hint">{effHarness === 'codex' ? 'Codex' : 'Gemini'} opens in {terminalPlace(term)} on your PC (no phone link: only Claude Code has Remote Control).</div>
               )}
-              <div className="hint">Permissions: {perm === 'bypassPermissions' ? 'skip permission prompts (like your usual sessions)' : perm}. Change in Settings.</div>
+              <div className="hint">Permissions: {(perm && PERM_LABEL[perm]) || perm}. Change in Settings.</div>
             </div>
           </Disclosure>
         </div>

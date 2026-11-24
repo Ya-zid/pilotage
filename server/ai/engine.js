@@ -107,7 +107,9 @@ export function computeBlocks(meta, turns) {
     const t = turns[i];
     const primary = PRIMARY.has(t.o);
     const gap = t.t && lastE && t.t - lastE > GAP;
-    if (!cur || (primary && cur.prompts > 0 && (gap || cur.prompts >= 60))) {
+    // Any primary turn counts as "something in the block": a block opened by a scripted (sdk) or peer prompt must
+    // still split when the user comes back after the gap.
+    if (!cur || (primary && cur.prompts + cur.sdk + cur.peers > 0 && (gap || cur.prompts >= 60))) {
       cur = { key: `${meta.id}:${i}`, sessionId: meta.id, i0: i, i1: i, startAt: t.t || meta.startedAt, endAt: t.e || t.t, prompts: 0, sdk: 0, peers: 0, texts: 0 };
       blocks.push(cur);
     }
@@ -331,7 +333,6 @@ export class AIEngine extends EventEmitter {
     this.queued = new Set();
     this.running = new Map();
     this.blockCache = new Map();
-    this.pausedByUser = false;
     this.guardReason = null;
     this._save = debounce(() => {
       backupAiFile(paths.ai);
@@ -341,6 +342,17 @@ export class AIEngine extends EventEmitter {
 
   get settings() {
     return this.store.settings.ai;
+  }
+
+  /** "Pause" in Settings → AI. Kept in the settings (state.json), so a restart or the login autostart doesn't resume
+   * spending after the user paused because their usage was running low. */
+  get pausedByUser() {
+    return !!this.store.settings.ai.paused;
+  }
+  set pausedByUser(v) {
+    if (!!this.store.settings.ai.paused === !!v) return;
+    this.store.settings.ai.paused = !!v;
+    this.store.save();
   }
 
   /** Blocks of one session (cached on lastAt/turnCount). */
@@ -420,16 +432,25 @@ export class AIEngine extends EventEmitter {
   }
 
   /** Blocks that need a (re)digest, most recent first. */
+  /**
+   * Blocks waiting for a digest, newest first. Automatic work only covers blocks that ended in the last
+   * `settings.ai.backfillDays` days (30 by default): on a first run, a long history would otherwise spend the
+   * subscription on year-old work and keep Home empty until the whole backlog is done. "Summarize now" (manual)
+   * covers everything.
+   */
   pendingBlocks({ manual = false } = {}) {
     const out = [];
     const now = Date.now();
     const sig = this.providerSig();
+    const days = Number(this.settings.backfillDays);
+    const oldest = manual ? 0 : now - (Number.isFinite(days) && days > 0 ? days : 30) * 86400e3;
     for (const meta of this.index.list()) {
       if (isAutomation(meta)) continue;
       const proj = this.registry.projectOfSession(meta);
       if (!proj) continue;
       const liveInfo = this.live.get(meta.id);
       for (const b of this.blocksOf(meta)) {
+        if ((b.endAt || 0) < oldest) continue;
         const d = this.state.blocks[b.key];
         if (d && d.hash === b.hash) continue;
         // Always require a quiet period (longer for live sessions), so an active session isn't re-summarized every tick.
@@ -665,7 +686,7 @@ export class AIEngine extends EventEmitter {
         description: clip(brief.description, 900),
         currentState: clip(brief.currentState, 500),
         ...briefSteps(brief),
-        attention: (brief.attention || []).slice(0, 5).map((s) => clip(s, 240)),
+        attention: asList(brief.attention).slice(0, 5).map((s) => clip(String(s), 240)),
         cv: brief.cv || null,
         threads,
       },
@@ -688,7 +709,8 @@ export class AIEngine extends EventEmitter {
       if (cur && cur.hash === h) continue;
       if (cur && cur.failHash === h && cur.failures >= 3 && cur.failSig === sig) continue;
       if (cur && cur.retryAt > now && cur.flakyHash === h) continue;
-      const hasSomething = blocks.length > 0 || project.isGit || project.sessionIds.length;
+      // Repos without sessions (cloned libraries, old checkouts) get a brief only when asked for ("Summarize now").
+      const hasSomething = blocks.length > 0 || project.sessionIds.length;
       if (!hasSomething) continue;
       out.push({ project, recent: project.lastAt || 0 });
     }
@@ -1028,7 +1050,10 @@ export class AIEngine extends EventEmitter {
 /** Human wording for errors shown in the UI. */
 function friendlyError(msg = '') {
   if (/structured_output|no structured output/i.test(msg)) return 'The model returned an invalid summary; it will be retried.';
-  if (/please run \/login|not logged in/i.test(msg)) return 'Claude is logged out on this PC (run claude in a terminal, then /login)';
+  if (/please run \/login|not logged in/i.test(msg))
+    return process.env.ANTHROPIC_API_KEY && process.env.PILOTAGE_USE_ANTHROPIC_API_KEY !== '1'
+      ? 'Claude is logged out on this PC (run claude, then /login). To bill ANTHROPIC_API_KEY instead, start Pilotage with PILOTAGE_USE_ANTHROPIC_API_KEY=1'
+      : 'Claude is logged out on this PC (run claude in a terminal, then /login)';
   if (/usage limit|limit reached|rate.?limit|429/i.test(msg)) return 'Claude usage limit reached; summaries resume automatically later.';
   if (/timeout|timed out/i.test(msg)) return 'A summary took too long and was stopped; it will be retried.';
   return msg;
@@ -1049,7 +1074,11 @@ export function briefSteps(brief = {}) {
   };
 }
 
+/** A list from a model field that should be one: a lone string becomes [string], anything else []. */
+const asList = (v) => (Array.isArray(v) ? v : typeof v === 'string' && v.trim() ? [v] : []);
+
 export function sanitizeDigest(d = {}) {
+  d = d && typeof d === 'object' ? d : {};
   return {
     title: clip(oneLine(d.title), 90),
     summary: clip(oneLine(d.summary), 400),
@@ -1061,6 +1090,6 @@ export function sanitizeDigest(d = {}) {
     topic: clip(oneLine(d.topic), 50),
     kind: d.kind,
     cvWorthy: !!d.cvWorthy,
-    highlights: (d.highlights || []).slice(0, 3).map((s) => clip(oneLine(s), 240)),
+    highlights: asList(d.highlights).slice(0, 3).map((s) => clip(oneLine(s), 240)),
   };
 }
