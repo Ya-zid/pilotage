@@ -13,6 +13,7 @@
 # to this script). Keep that file out of anything you publish. Intended hits: scripts/leak-allowlist.txt
 # (<path glob><TAB><line regex>), or $PILOTAGE_LEAK_ALLOWLIST.
 set -uo pipefail
+# Runs on macOS's bash 3.2 too: an empty array must be expanded as ${a[@]+"${a[@]}"} under set -u.
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PACKAGE=0
@@ -78,6 +79,7 @@ fi
 
 allowed() { # file text
   local i
+  [ "${#ALLOW_GLOBS[@]}" -gt 0 ] || return 1 # bash 3.2 (macOS): an empty array is "unbound" under set -u
   for i in "${!ALLOW_GLOBS[@]}"; do
     # shellcheck disable=SC2053
     if [[ "$1" == ${ALLOW_GLOBS[$i]} ]] && [[ "$2" =~ ${ALLOW_RES[$i]} ]]; then return 0; fi
@@ -132,13 +134,13 @@ while IFS=$'\t' read -r label re; do
     benign "$label" "$text" && continue
     allowed "$file" "$text" && continue
     report "$file" "$line" "$label${case_flag:+: $re}" "$text"
-  done < <(printf '%s\0' "${FILES[@]}" | xargs -0 grep -n -I -H "${case_flag[@]}" -E -e "$re" -- 2>/dev/null)
+  done < <(printf '%s\0' "${FILES[@]}" | xargs -0 grep -n -I -H ${case_flag[@]+"${case_flag[@]}"} -E -e "$re" -- 2>/dev/null)
   # file names
   while IFS= read -r f; do
     benign "$label" "$f" && continue
     allowed "$f" "$f" && continue
     report "$f" "-" "file name, $label${case_flag:+: $re}" "$f"
-  done < <(printf '%s\n' "${FILES[@]}" | grep "${case_flag[@]}" -E -e "$re")
+  done < <(printf '%s\n' "${FILES[@]}" | grep ${case_flag[@]+"${case_flag[@]}"} -E -e "$re")
   # binary files (images, icons): private patterns only, e.g. a path or a name in PNG metadata
   if [ "$label" = private ] && [ "${#BIN_FILES[@]}" -gt 0 ]; then
     while IFS= read -r f; do

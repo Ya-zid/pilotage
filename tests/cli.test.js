@@ -491,6 +491,8 @@ test('leak-scan uses only portable regex and sed (macOS has BSD grep and sed: \\
   assert.doesNotMatch(table, /\\[bswdBSWD]/, 'a GNU-only escape in the pattern table');
   assert.doesNotMatch(script, /grep[^\n]*'[^'\n]*\\s/, 'a GNU-only \\s in a grep expression');
   assert.doesNotMatch(script, /sed 's\/\^\/[^']*\\t/, "BSD sed writes \\t as a plain t");
+  // bash 3.2 (macOS) treats "${a[@]}" of an empty array as unbound under set -u: the grep never ran there.
+  assert.doesNotMatch(script.replace(/\$\{(\w+)\[@\]\+"\$\{\1\[@\]\}"\}/g, ''), /"\$\{case_flag\[@\]\}"/, 'an empty array expanded the bash 4.4 way');
   // And it still catches a token right after `=` or at the start of a line, but not inside a longer word.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pilotage-leak-b-'));
   const scan = (text) => {
